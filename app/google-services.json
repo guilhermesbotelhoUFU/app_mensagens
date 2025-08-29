@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "120650509063",
+    "project_id": "app-mensagem-d34ef",
+    "storage_bucket": "app-mensagem-d34ef.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:120650509063:android:1b71fa61c87a0eeca6f3a2",
+        "android_client_info": {
+          "package_name": "com.example.app_mensagem"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCoxxg2b-ggd3TPbtHoMkEwoFz5kzX00IA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
