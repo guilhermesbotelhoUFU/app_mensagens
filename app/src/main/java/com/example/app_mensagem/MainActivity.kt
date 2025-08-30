@@ -11,14 +11,18 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
+import com.example.app_mensagem.presentation.auth.ForgotPasswordScreen
 import com.example.app_mensagem.presentation.auth.LoginScreen
 import com.example.app_mensagem.presentation.auth.SignUpScreen
+import com.example.app_mensagem.presentation.chat.ChatScreen
+import com.example.app_mensagem.presentation.contacts.ContactsScreen
 import com.example.app_mensagem.presentation.home.HomeScreen
-import com.example.app_mensagem.presentation.viewmodel.AuthUiState
-import com.example.app_mensagem.presentation.viewmodel.AuthViewModel
+import com.example.app_mensagem.presentation.viewmodel.*
 import com.example.app_mensagem.ui.theme.App_mensagemTheme
 import com.google.firebase.auth.FirebaseAuth
 
@@ -33,6 +37,8 @@ class MainActivity : ComponentActivity() {
                 ) {
                     val navController = rememberNavController()
                     val authViewModel: AuthViewModel by viewModels()
+                    val conversationsViewModel: ConversationsViewModel by viewModels() // NOME ALTERADO AQUI
+                    val contactsViewModel: ContactsViewModel by viewModels()
                     val authState by authViewModel.uiState.collectAsState()
 
                     LaunchedEffect(authState) {
@@ -58,7 +64,20 @@ class MainActivity : ComponentActivity() {
                             SignUpScreen(navController, authViewModel)
                         }
                         composable("home") {
-                            HomeScreen(navController, authViewModel)
+                            HomeScreen(navController, authViewModel, conversationsViewModel) // NOME ALTERADO AQUI
+                        }
+                        composable("forgot_password") {
+                            ForgotPasswordScreen(navController, authViewModel)
+                        }
+                        composable("contacts") {
+                            ContactsScreen(navController, contactsViewModel)
+                        }
+                        composable(
+                            route = "chat/{conversationId}",
+                            arguments = listOf(navArgument("conversationId") { type = NavType.StringType })
+                        ) { backStackEntry ->
+                            val conversationId = backStackEntry.arguments?.getString("conversationId")
+                            ChatScreen(navController, conversationId)
                         }
                     }
                 }

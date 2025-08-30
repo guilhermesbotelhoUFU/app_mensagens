@@ -14,6 +14,7 @@ sealed class AuthUiState {
     data class Success(val uid: String) : AuthUiState()
     data class Error(val message: String) : AuthUiState()
     object SignedOut : AuthUiState()
+    object PasswordResetSent : AuthUiState()
 }
 
 class AuthViewModel : ViewModel() {
@@ -44,6 +45,18 @@ class AuthViewModel : ViewModel() {
                 _uiState.value = AuthUiState.Success(result.user?.uid ?: "")
             } catch (e: Exception) {
                 _uiState.value = AuthUiState.Error(e.message ?: "Ocorreu um erro ao criar a conta.")
+            }
+        }
+    }
+
+    fun sendPasswordResetEmail(email: String) {
+        viewModelScope.launch {
+            _uiState.value = AuthUiState.Loading
+            try {
+                repository.sendPasswordResetEmail(email)
+                _uiState.value = AuthUiState.PasswordResetSent
+            } catch (e: Exception) {
+                _uiState.value = AuthUiState.Error(e.message ?: "Falha ao enviar e-mail.")
             }
         }
     }
