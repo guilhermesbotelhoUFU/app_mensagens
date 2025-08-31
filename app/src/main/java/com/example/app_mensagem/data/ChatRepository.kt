@@ -1,5 +1,7 @@
 package com.example.app_mensagem.data
 
+import com.example.app_mensagem.data.local.ConversationDao
+import com.example.app_mensagem.data.local.MessageDao
 import com.example.app_mensagem.data.model.Conversation
 import com.example.app_mensagem.data.model.Message
 import com.example.app_mensagem.data.model.User
@@ -8,39 +10,158 @@ import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ValueEventListener
+import com.google.firebase.database.getValue
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
 
-class ChatRepository {
+class ChatRepository(
+    private val conversationDao: ConversationDao,
+    private val messageDao: MessageDao
+) {
 
     private val auth: FirebaseAuth = FirebaseAuth.getInstance()
     private val database: FirebaseDatabase = FirebaseDatabase.getInstance()
 
-    fun getConversations(userId: String): Flow<List<Conversation>> = callbackFlow {
-        val conversationsRef = database.getReference("user-conversations").child(userId)
+    suspend fun toggleReaction(conversationId: String, messageId: String, emoji: String) {
+        val currentUserId = auth.currentUser?.uid ?: return
+        val messageRef = database.getReference("messages/$conversationId/$messageId")
 
-        val listener = object : ValueEventListener {
+        val snapshot = messageRef.child("reactions").get().await()
+        val reactions = snapshot.getValue<MutableMap<String, String>>() ?: mutableMapOf()
+
+        if (reactions[currentUserId] == emoji) {
+            reactions.remove(currentUserId)
+        } else {
+            reactions[currentUserId] = emoji
+        }
+
+        messageRef.child("reactions").setValue(reactions).await()
+    }
+
+    fun getMessagesForConversation(conversationId: String): Flow<List<Message>> {
+        val currentUserId = auth.currentUser?.uid
+        val messagesRef = database.getReference("messages").child(conversationId)
+
+        messagesRef.addValueEventListener(object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
-                val conversations = snapshot.children.mapNotNull {
-                    it.getValue(Conversation::class.java)
+                val messages = snapshot.children.mapNotNull {
+                    val msg = it.getValue(Message::class.java)
+                    msg?.copy(conversationId = conversationId)
                 }
-                trySend(conversations)
-            }
 
-            override fun onCancelled(error: DatabaseError) {
-                close(error.toException())
+                CoroutineScope(Dispatchers.IO).launch {
+                    messages.forEach { message ->
+                        messageDao.insertOrUpdate(message)
+                        // Lógica de confirmação de entrega
+                        if (message.senderId != currentUserId && message.deliveredTimestamp == 0L) {
+                            confirmDelivery(conversationId, message.id)
+                        }
+                    }
+                }
+            }
+            override fun onCancelled(error: DatabaseError) { }
+        })
+
+        return messageDao.getMessagesForConversation(conversationId)
+    }
+
+    private fun confirmDelivery(conversationId: String, messageId: String) {
+        database.getReference("messages/$conversationId/$messageId")
+            .child("deliveredTimestamp").setValue(System.currentTimeMillis())
+    }
+
+    fun markMessagesAsRead(conversationId: String, messages: List<Message>) {
+        val currentUserId = auth.currentUser?.uid
+        messages.forEach { message ->
+            if (message.senderId != currentUserId && message.readTimestamp == 0L) {
+                database.getReference("messages/$conversationId/${message.id}")
+                    .child("readTimestamp").setValue(System.currentTimeMillis())
             }
         }
+    }
 
-        conversationsRef.addValueEventListener(listener)
+    // O resto do repositório permanece o mesmo...
+    fun getConversations(): Flow<List<Conversation>> {
+        val userId = auth.currentUser?.uid ?: return flowOf(emptyList())
 
-        awaitClose {
-            conversationsRef.removeEventListener(listener)
+        val conversationsRef = database.getReference("user-conversations").child(userId)
+        conversationsRef.addValueEventListener(object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                val conversations = snapshot.children.mapNotNull { it.getValue(Conversation::class.java) }
+                CoroutineScope(Dispatchers.IO).launch {
+                    conversations.forEach { conversationDao.insertOrUpdate(it) }
+                }
+            }
+            override fun onCancelled(error: DatabaseError) { }
+        })
+
+        return conversationDao.getAllConversations()
+    }
+
+    suspend fun sendMessage(conversationId: String, text: String) {
+        val currentUserId = auth.currentUser?.uid ?: return
+        val messagesRef = database.getReference("messages").child(conversationId)
+        val messageId = messagesRef.push().key ?: return
+
+        val message = Message(
+            id = messageId,
+            conversationId = conversationId,
+            senderId = currentUserId,
+            text = text,
+            timestamp = System.currentTimeMillis(),
+            status = "SENDING"
+        )
+
+        messageDao.insertOrUpdate(message)
+
+        try {
+            messagesRef.child(messageId).setValue(message).await()
+            messageDao.insertOrUpdate(message.copy(status = "SENT"))
+
+            val lastMessageUpdate = mapOf("lastMessage" to text, "timestamp" to message.timestamp)
+            val userIds = conversationId.split("-")
+            if (userIds.size == 2) {
+                database.getReference("user-conversations/${userIds[0]}/$conversationId").updateChildren(lastMessageUpdate)
+                database.getReference("user-conversations/${userIds[1]}/$conversationId").updateChildren(lastMessageUpdate)
+            }
+        } catch (e: Exception) {
+            messageDao.insertOrUpdate(message.copy(status = "FAILED"))
         }
+    }
+
+    suspend fun createOrGetConversation(targetUser: User): String {
+        val currentUserId = auth.currentUser?.uid ?: throw IllegalStateException("Usuário não autenticado")
+        val conversationId = getConversationId(currentUserId, targetUser.uid)
+
+        val existingConversation = conversationDao.getConversationById(conversationId)
+        if (existingConversation != null) {
+            return conversationId
+        }
+
+        val currentUserSnapshot = database.getReference("users").child(currentUserId).get().await()
+        val currentUserName = currentUserSnapshot.child("name").getValue(String::class.java) ?: "Usuário"
+
+        val conversationForCurrentUser = Conversation(id = conversationId, name = targetUser.name, lastMessage = "Inicie a conversa!", timestamp = System.currentTimeMillis())
+        val conversationForTargetUser = Conversation(id = conversationId, name = currentUserName, lastMessage = "Inicie a conversa!", timestamp = System.currentTimeMillis())
+
+        database.getReference("user-conversations/$currentUserId/$conversationId").setValue(conversationForCurrentUser).await()
+        database.getReference("user-conversations/${targetUser.uid}/$conversationId").setValue(conversationForTargetUser).await()
+
+        conversationDao.insertOrUpdate(conversationForCurrentUser)
+
+        return conversationId
+    }
+
+    private fun getConversationId(userId1: String, userId2: String): String {
+        return if (userId1 > userId2) "$userId1-$userId2" else "$userId2-$userId1"
     }
 
     fun getUsers(): Flow<List<User>> = callbackFlow {
@@ -54,103 +175,10 @@ class ChatRepository {
                 }.filter { it.uid != currentUserId }
                 trySend(users)
             }
-
-            override fun onCancelled(error: DatabaseError) {
-                close(error.toException())
-            }
+            override fun onCancelled(error: DatabaseError) { close(error.toException()) }
         }
         usersRef.addValueEventListener(listener)
-
         awaitClose { usersRef.removeEventListener(listener) }
-    }
-
-
-    suspend fun createOrGetConversation(targetUser: User): String {
-        val currentUserId = auth.currentUser?.uid ?: throw IllegalStateException("Usuário não autenticado")
-        val targetUserId = targetUser.uid
-
-        val conversationId = if (currentUserId > targetUserId) {
-            "$currentUserId-$targetUserId"
-        } else {
-            "$targetUserId-$currentUserId"
-        }
-
-        val conversationRef = database.getReference("user-conversations/$currentUserId/$conversationId")
-        val snapshot = conversationRef.get().await()
-
-        if (snapshot.exists()) {
-            return conversationId
-        }
-
-        val currentUserConversation = Conversation(
-            id = conversationId,
-            name = targetUser.name,
-            lastMessage = "Inicie a conversa!",
-            timestamp = System.currentTimeMillis()
-        )
-
-        val targetUserConversation = Conversation(
-            id = conversationId,
-            name = auth.currentUser?.email?.substringBefore('@') ?: "Usuário",
-            lastMessage = "Inicie a conversa!",
-            timestamp = System.currentTimeMillis()
-        )
-
-        database.getReference("user-conversations/$currentUserId/$conversationId")
-            .setValue(currentUserConversation).await()
-
-        database.getReference("user-conversations/$targetUserId/$conversationId")
-            .setValue(targetUserConversation).await()
-
-        return conversationId
-    }
-
-    fun getMessages(conversationId: String): Flow<List<Message>> = callbackFlow {
-        val messagesRef = database.getReference("messages").child(conversationId)
-
-        val listener = messagesRef.addValueEventListener(object : ValueEventListener {
-            override fun onDataChange(snapshot: DataSnapshot) {
-                val messages = snapshot.children.mapNotNull {
-                    it.getValue(Message::class.java)
-                }
-                trySend(messages)
-            }
-
-            override fun onCancelled(error: DatabaseError) {
-                close(error.toException())
-            }
-        })
-
-        awaitClose { messagesRef.removeEventListener(listener) }
-    }
-
-    suspend fun sendMessage(conversationId: String, text: String) {
-        val currentUserId = auth.currentUser?.uid ?: throw IllegalStateException("Usuário não autenticado")
-        val messagesRef = database.getReference("messages").child(conversationId)
-        val messageId = messagesRef.push().key ?: throw IllegalStateException("Não foi possível criar ID da mensagem")
-
-        val message = Message(
-            id = messageId,
-            senderId = currentUserId,
-            text = text,
-            timestamp = System.currentTimeMillis()
-        )
-
-        messagesRef.child(messageId).setValue(message).await()
-
-        val lastMessageUpdate = mapOf(
-            "lastMessage" to text,
-            "timestamp" to message.timestamp
-        )
-
-        val userIds = conversationId.split("-")
-        if (userIds.size == 2) {
-            val user1 = userIds[0]
-            val user2 = userIds[1]
-
-            database.getReference("user-conversations/$user1/$conversationId").updateChildren(lastMessageUpdate)
-            database.getReference("user-conversations/$user2/$conversationId").updateChildren(lastMessageUpdate)
-        }
     }
 
     suspend fun getConversationDetails(conversationId: String): Conversation? = suspendCoroutine { continuation ->

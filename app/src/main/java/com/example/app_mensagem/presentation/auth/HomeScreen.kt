@@ -23,7 +23,6 @@ import com.example.app_mensagem.presentation.viewmodel.AuthViewModel
 import com.example.app_mensagem.presentation.viewmodel.ConversationUiState
 import com.example.app_mensagem.presentation.viewmodel.ConversationsViewModel
 import com.example.app_mensagem.ui.theme.App_mensagemTheme
-import com.google.firebase.auth.FirebaseAuth
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -38,11 +37,7 @@ fun HomeScreen(
     var showMenu by remember { mutableStateOf(false) }
     val conversationState by conversationsViewModel.uiState.collectAsState()
 
-    LaunchedEffect(FirebaseAuth.getInstance().currentUser) {
-        if (FirebaseAuth.getInstance().currentUser != null) {
-            conversationsViewModel.loadConversations()
-        }
-    }
+    // O BLOCO LaunchedEffect FOI REMOVIDO DAQUI
 
     Scaffold(
         topBar = {
@@ -100,7 +95,6 @@ fun HomeScreen(
                         )
                     } else {
                         LazyColumn(modifier = Modifier.fillMaxSize()) {
-                            // Ordena as conversas pela mais recente
                             items(state.conversations.sortedByDescending { it.timestamp }) { conversation ->
                                 ConversationItem(conversation = conversation) {
                                     navController.navigate("chat/${conversation.id}")

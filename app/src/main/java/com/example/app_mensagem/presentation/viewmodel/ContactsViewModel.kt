@@ -1,14 +1,14 @@
 package com.example.app_mensagem.presentation.viewmodel
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.app_mensagem.MyApplication
 import com.example.app_mensagem.data.ChatRepository
 import com.example.app_mensagem.data.model.User
-import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.catch
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 
 sealed class ContactsUiState {
@@ -22,10 +22,9 @@ sealed class ContactNavigationState {
     data class NavigateToChat(val conversationId: String) : ContactNavigationState()
 }
 
-class ContactsViewModel : ViewModel() {
+class ContactsViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val repository = ChatRepository()
-    private val auth = FirebaseAuth.getInstance()
+    private val repository: ChatRepository
 
     private val _uiState = MutableStateFlow<ContactsUiState>(ContactsUiState.Loading)
     val uiState: StateFlow<ContactsUiState> = _uiState
@@ -33,29 +32,20 @@ class ContactsViewModel : ViewModel() {
     private val _navigationState = MutableStateFlow<ContactNavigationState>(ContactNavigationState.Idle)
     val navigationState: StateFlow<ContactNavigationState> = _navigationState
 
+    init {
+        val db = (application as MyApplication).database
+        repository = ChatRepository(db.conversationDao(), db.messageDao())
+        loadUsers()
+    }
+
     fun loadUsers() {
-        val currentUserId = auth.currentUser?.uid
-        if (currentUserId == null) {
-            _uiState.value = ContactsUiState.Error("Usuário não autenticado.")
-            return
-        }
-
         viewModelScope.launch {
-            val allUsersFlow = repository.getUsers()
-            val conversationsFlow = repository.getConversations(currentUserId)
-
-            allUsersFlow.combine(conversationsFlow) { allUsers, conversations ->
-                val existingConversationUserIds = conversations.map {
-                    it.id.replace(currentUserId, "").replace("-", "")
-                }.toSet()
-
-                allUsers.filter { user -> user.uid !in existingConversationUserIds }
-            }
+            repository.getUsers()
                 .catch { exception ->
                     _uiState.value = ContactsUiState.Error(exception.message ?: "Erro desconhecido")
                 }
-                .collect { filteredUsers ->
-                    _uiState.value = ContactsUiState.Success(filteredUsers)
+                .collect { users ->
+                    _uiState.value = ContactsUiState.Success(users)
                 }
         }
     }

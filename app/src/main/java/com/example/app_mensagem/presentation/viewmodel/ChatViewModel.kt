@@ -1,9 +1,13 @@
 package com.example.app_mensagem.presentation.viewmodel
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.app_mensagem.MyApplication
 import com.example.app_mensagem.data.ChatRepository
 import com.example.app_mensagem.data.model.Message
+import com.google.firebase.auth.FirebaseAuth
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.catch
@@ -16,12 +20,18 @@ data class ChatUiState(
     val error: String? = null
 )
 
-class ChatViewModel : ViewModel() {
+class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val repository = ChatRepository()
+    private val repository: ChatRepository
+    private val auth: FirebaseAuth = FirebaseAuth.getInstance()
 
     private val _uiState = MutableStateFlow(ChatUiState())
     val uiState: StateFlow<ChatUiState> = _uiState
+
+    init {
+        val db = (application as MyApplication).database
+        repository = ChatRepository(db.conversationDao(), db.messageDao())
+    }
 
     fun loadMessages(conversationId: String) {
         viewModelScope.launch {
@@ -29,7 +39,7 @@ class ChatViewModel : ViewModel() {
                 _uiState.value = _uiState.value.copy(conversationTitle = conversation.name)
             }
 
-            repository.getMessages(conversationId)
+            repository.getMessagesForConversation(conversationId)
                 .catch { exception ->
                     _uiState.value = _uiState.value.copy(
                         error = exception.message ?: "Erro ao carregar mensagens",
@@ -41,7 +51,15 @@ class ChatViewModel : ViewModel() {
                         messages = messages,
                         isLoading = false
                     )
+                    // Lógica para marcar mensagens como lidas
+                    repository.markMessagesAsRead(conversationId, messages)
                 }
+        }
+    }
+
+    fun onReactionClick(conversationId: String, messageId: String, emoji: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.toggleReaction(conversationId, messageId, emoji)
         }
     }
 

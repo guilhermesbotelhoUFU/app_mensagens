@@ -1,10 +1,11 @@
 package com.example.app_mensagem.presentation.viewmodel
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.app_mensagem.MyApplication
 import com.example.app_mensagem.data.ChatRepository
 import com.example.app_mensagem.data.model.Conversation
-import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.catch
@@ -16,24 +17,22 @@ sealed class ConversationUiState {
     data class Error(val message: String) : ConversationUiState()
 }
 
-class ConversationsViewModel : ViewModel() {
+class ConversationsViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val repository = ChatRepository()
-    private val auth = FirebaseAuth.getInstance()
+    private val repository: ChatRepository
 
     private val _uiState = MutableStateFlow<ConversationUiState>(ConversationUiState.Loading)
     val uiState: StateFlow<ConversationUiState> = _uiState
 
+    init {
+        val db = (application as MyApplication).database
+        repository = ChatRepository(db.conversationDao(), db.messageDao())
+        loadConversations()
+    }
 
     fun loadConversations() {
-        val userId = auth.currentUser?.uid
-        if (userId == null) {
-            _uiState.value = ConversationUiState.Error("Usuário não autenticado.")
-            return
-        }
-
         viewModelScope.launch {
-            repository.getConversations(userId)
+            repository.getConversations()
                 .catch { exception ->
                     _uiState.value = ConversationUiState.Error(exception.message ?: "Erro desconhecido")
                 }

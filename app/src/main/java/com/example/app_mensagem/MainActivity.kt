@@ -1,8 +1,11 @@
 package com.example.app_mensagem
 
+import android.Manifest
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
@@ -25,10 +28,23 @@ import com.example.app_mensagem.presentation.home.HomeScreen
 import com.example.app_mensagem.presentation.viewmodel.*
 import com.example.app_mensagem.ui.theme.App_mensagemTheme
 import com.google.firebase.auth.FirebaseAuth
+import com.example.app_mensagem.presentation.viewmodel.ContactsViewModel
 
 class MainActivity : ComponentActivity() {
+
+    private val requestPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { }
+
+    private fun askNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            requestPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        askNotificationPermission()
         setContent {
             App_mensagemTheme {
                 Surface(
@@ -37,7 +53,7 @@ class MainActivity : ComponentActivity() {
                 ) {
                     val navController = rememberNavController()
                     val authViewModel: AuthViewModel by viewModels()
-                    val conversationsViewModel: ConversationsViewModel by viewModels() // NOME ALTERADO AQUI
+                    val conversationsViewModel: ConversationsViewModel by viewModels()
                     val contactsViewModel: ContactsViewModel by viewModels()
                     val authState by authViewModel.uiState.collectAsState()
 
@@ -64,7 +80,7 @@ class MainActivity : ComponentActivity() {
                             SignUpScreen(navController, authViewModel)
                         }
                         composable("home") {
-                            HomeScreen(navController, authViewModel, conversationsViewModel) // NOME ALTERADO AQUI
+                            HomeScreen(navController, authViewModel, conversationsViewModel)
                         }
                         composable("forgot_password") {
                             ForgotPasswordScreen(navController, authViewModel)
