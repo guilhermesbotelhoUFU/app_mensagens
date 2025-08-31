@@ -5,12 +5,15 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -19,6 +22,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import com.example.app_mensagem.data.model.Conversation
+// NOVA IMPORTAÇÃO
+import com.example.app_mensagem.presentation.common.PlaceholderAvatar
 import com.example.app_mensagem.presentation.viewmodel.AuthViewModel
 import com.example.app_mensagem.presentation.viewmodel.ConversationUiState
 import com.example.app_mensagem.presentation.viewmodel.ConversationsViewModel
@@ -36,45 +41,81 @@ fun HomeScreen(
 ) {
     var showMenu by remember { mutableStateOf(false) }
     val conversationState by conversationsViewModel.uiState.collectAsState()
-
-    // O BLOCO LaunchedEffect FOI REMOVIDO DAQUI
+    var isSearchActive by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Conversas") },
+                title = {
+                    if (isSearchActive) {
+                        val searchQuery = (conversationState as? ConversationUiState.Success)?.searchQuery ?: ""
+                        TextField(
+                            value = searchQuery,
+                            onValueChange = { conversationsViewModel.onSearchQueryChanged(it) },
+                            placeholder = { Text("Buscar conversas...") },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = TextFieldDefaults.colors(
+                                focusedContainerColor = Color.Transparent,
+                                unfocusedContainerColor = Color.Transparent,
+                                disabledContainerColor = Color.Transparent,
+                                focusedIndicatorColor = Color.Transparent,
+                                unfocusedIndicatorColor = Color.Transparent,
+                                cursorColor = MaterialTheme.colorScheme.onPrimary,
+                                focusedTextColor = MaterialTheme.colorScheme.onPrimary,
+                                unfocusedPlaceholderColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.5f),
+                                focusedPlaceholderColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.5f)
+                            ),
+                            textStyle = LocalTextStyle.current.copy(color = MaterialTheme.colorScheme.onPrimary)
+                        )
+                    } else {
+                        Text("Conversas")
+                    }
+                },
+                navigationIcon = {
+                    if (isSearchActive) {
+                        IconButton(onClick = {
+                            isSearchActive = false
+                            conversationsViewModel.onSearchQueryChanged("")
+                        }) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Fechar Busca", tint = MaterialTheme.colorScheme.onPrimary)
+                        }
+                    }
+                },
+                actions = {
+                    if (!isSearchActive) {
+                        IconButton(onClick = { isSearchActive = true }) {
+                            Icon(Icons.Default.Search, contentDescription = "Buscar", tint = MaterialTheme.colorScheme.onPrimary)
+                        }
+                        IconButton(onClick = { showMenu = !showMenu }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "Menu de opções", tint = MaterialTheme.colorScheme.onPrimary)
+                        }
+                        DropdownMenu(
+                            expanded = showMenu,
+                            onDismissRequest = { showMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Sair") },
+                                onClick = {
+                                    showMenu = false
+                                    authViewModel.logout()
+                                }
+                            )
+                        }
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.primary,
                     titleContentColor = MaterialTheme.colorScheme.onPrimary
-                ),
-                actions = {
-                    IconButton(onClick = { showMenu = !showMenu }) {
-                        Icon(
-                            imageVector = Icons.Default.MoreVert,
-                            contentDescription = "Menu de opções",
-                            tint = MaterialTheme.colorScheme.onPrimary
-                        )
-                    }
-                    DropdownMenu(
-                        expanded = showMenu,
-                        onDismissRequest = { showMenu = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("Sair") },
-                            onClick = {
-                                showMenu = false
-                                authViewModel.logout()
-                            }
-                        )
-                    }
-                }
+                )
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = {
-                navController.navigate("contacts")
-            }) {
-                Icon(Icons.Default.Add, contentDescription = "Nova Conversa")
+            if (!isSearchActive) {
+                FloatingActionButton(onClick = {
+                    navController.navigate("contacts")
+                }) {
+                    Icon(Icons.Default.Add, contentDescription = "Nova Conversa")
+                }
             }
         }
     ) { paddingValues ->
@@ -88,14 +129,16 @@ fun HomeScreen(
                     CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
                 }
                 is ConversationUiState.Success -> {
-                    if (state.conversations.isEmpty()) {
-                        Text(
-                            "Nenhuma conversa encontrada.",
-                            modifier = Modifier.align(Alignment.Center)
-                        )
+                    if (state.filteredConversations.isEmpty()) {
+                        val message = if (state.searchQuery.isNotEmpty()) {
+                            "Nenhum resultado para \"${state.searchQuery}\""
+                        } else {
+                            "Nenhuma conversa encontrada."
+                        }
+                        Text(message, modifier = Modifier.align(Alignment.Center).padding(16.dp))
                     } else {
                         LazyColumn(modifier = Modifier.fillMaxSize()) {
-                            items(state.conversations.sortedByDescending { it.timestamp }) { conversation ->
+                            items(state.filteredConversations.sortedByDescending { it.timestamp }) { conversation ->
                                 ConversationItem(conversation = conversation) {
                                     navController.navigate("chat/${conversation.id}")
                                 }
@@ -114,6 +157,8 @@ fun HomeScreen(
     }
 }
 
+// O AVATAR FOI REMOVIDO DAQUI
+
 @Composable
 fun ConversationItem(conversation: Conversation, onClick: () -> Unit) {
     Row(
@@ -123,6 +168,10 @@ fun ConversationItem(conversation: Conversation, onClick: () -> Unit) {
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        PlaceholderAvatar(name = conversation.name)
+
+        Spacer(modifier = Modifier.width(16.dp))
+
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = conversation.name,

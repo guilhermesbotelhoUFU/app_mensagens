@@ -5,7 +5,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -17,11 +17,11 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import androidx.navigation.compose.rememberNavController
 import com.example.app_mensagem.data.model.User
+import com.example.app_mensagem.presentation.common.PlaceholderAvatar
 import com.example.app_mensagem.presentation.viewmodel.ContactNavigationState
 import com.example.app_mensagem.presentation.viewmodel.ContactsUiState
 import com.example.app_mensagem.presentation.viewmodel.ContactsViewModel
 import com.example.app_mensagem.ui.theme.App_mensagemTheme
-import com.google.firebase.auth.FirebaseAuth
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -32,16 +32,15 @@ fun ContactsScreen(
     val contactsState by contactsViewModel.uiState.collectAsState()
     val navigationState by contactsViewModel.navigationState.collectAsState()
 
-    LaunchedEffect(FirebaseAuth.getInstance().currentUser) {
-        if (FirebaseAuth.getInstance().currentUser != null) {
-            contactsViewModel.loadUsers()
-        }
-    }
+    // Este LaunchedEffect foi removido pois a chamada agora é feita no init do ViewModel
+    // LaunchedEffect(FirebaseAuth.getInstance().currentUser) { ... }
 
     LaunchedEffect(navigationState) {
         if (navigationState is ContactNavigationState.NavigateToChat) {
             val conversationId = (navigationState as ContactNavigationState.NavigateToChat).conversationId
-            navController.navigate("chat/$conversationId")
+            navController.navigate("chat/$conversationId") {
+                popUpTo("home")
+            }
             contactsViewModel.onNavigated()
         }
     }
@@ -52,10 +51,20 @@ fun ContactsScreen(
                 title = { Text("Iniciar Conversa") },
                 navigationIcon = {
                     IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Voltar")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Voltar")
                     }
                 }
             )
+        },
+        bottomBar = {
+            Button(
+                onClick = { navController.navigate("import_contacts") },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp)
+            ) {
+                Text("Importar da Agenda do Celular")
+            }
         }
     ) { paddingValues ->
         Box(
@@ -96,15 +105,20 @@ fun ContactsScreen(
 
 @Composable
 fun UserItem(user: User, onClick: () -> Unit) {
-    Column(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(user.name, fontWeight = FontWeight.Bold)
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(user.email, style = MaterialTheme.typography.bodySmall)
+        PlaceholderAvatar(name = user.name, modifier = Modifier.size(40.dp))
+        Spacer(modifier = Modifier.width(16.dp))
+        Column {
+            Text(user.name, fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(user.email, style = MaterialTheme.typography.bodySmall)
+        }
     }
     Divider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
 }

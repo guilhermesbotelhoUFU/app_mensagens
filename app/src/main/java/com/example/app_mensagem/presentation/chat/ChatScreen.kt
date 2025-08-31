@@ -1,13 +1,18 @@
 package com.example.app_mensagem.presentation.chat
 
+import androidx.annotation.DrawableRes
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -23,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -34,7 +40,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
+import com.example.app_mensagem.R
 import com.example.app_mensagem.data.model.Message
+import com.example.app_mensagem.presentation.common.PlaceholderAvatar
 import com.example.app_mensagem.presentation.viewmodel.ChatViewModel
 import com.example.app_mensagem.ui.theme.App_mensagemTheme
 import com.google.firebase.auth.FirebaseAuth
@@ -42,6 +50,16 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.regex.Pattern
+
+// Modelo para representar um Sticker
+data class Sticker(@DrawableRes val resourceId: Int, val id: String)
+
+// Lista de stickers disponíveis no app
+val stickerList = listOf(
+    Sticker(R.drawable.sticker_01, "sticker_01"),
+    Sticker(R.drawable.sticker_02, "sticker_02"),
+    Sticker(R.drawable.sticker_03, "sticker_03"),
+)
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -52,6 +70,7 @@ fun ChatScreen(navController: NavController, conversationId: String?) {
     val listState = rememberLazyListState()
     var selectedMessageId by remember { mutableStateOf<String?>(null) }
     var isSearchActive by remember { mutableStateOf(false) }
+    var isStickerPanelVisible by remember { mutableStateOf(false) }
 
     LaunchedEffect(conversationId) {
         if (conversationId != null) {
@@ -59,10 +78,9 @@ fun ChatScreen(navController: NavController, conversationId: String?) {
         }
     }
 
-    LaunchedEffect(uiState.filteredMessages.size) {
-        // Rola para o final apenas se a busca não estiver ativa
-        if (uiState.searchQuery.isBlank() && uiState.filteredMessages.isNotEmpty()) {
-            listState.animateScrollToItem(uiState.filteredMessages.size - 1)
+    LaunchedEffect(uiState.chatItems.size) {
+        if (uiState.searchQuery.isBlank() && uiState.chatItems.isNotEmpty()) {
+            listState.animateScrollToItem(uiState.chatItems.size - 1)
         }
     }
 
@@ -88,7 +106,17 @@ fun ChatScreen(navController: NavController, conversationId: String?) {
                             textStyle = LocalTextStyle.current.copy(color = MaterialTheme.colorScheme.onPrimary)
                         )
                     } else {
-                        Text(uiState.conversationTitle)
+                        // **** AQUI ESTÁ A CORREÇÃO ****
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (uiState.conversationTitle.isNotEmpty()) {
+                                PlaceholderAvatar(
+                                    name = uiState.conversationTitle,
+                                    modifier = Modifier.size(40.dp)
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                            }
+                            Text(uiState.conversationTitle)
+                        }
                     }
                 },
                 navigationIcon = {
@@ -119,25 +147,27 @@ fun ChatScreen(navController: NavController, conversationId: String?) {
             )
         },
         bottomBar = {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                OutlinedTextField(
-                    value = text,
-                    onValueChange = { text = it },
-                    modifier = Modifier.weight(1f),
-                    placeholder = { Text("Digite uma mensagem...") }
+            Column {
+                ChatInputBar(
+                    text = text,
+                    onTextChange = { text = it },
+                    onSendClick = {
+                        if (conversationId != null && text.isNotBlank()) {
+                            chatViewModel.sendMessage(conversationId, text)
+                            text = ""
+                        }
+                    },
+                    onStickerClick = { isStickerPanelVisible = !isStickerPanelVisible }
                 )
-                IconButton(onClick = {
-                    if (conversationId != null && text.isNotBlank()) {
-                        chatViewModel.sendMessage(conversationId, text)
-                        text = ""
-                    }
-                }) {
-                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Enviar")
+                AnimatedVisibility(visible = isStickerPanelVisible) {
+                    StickerPanel(
+                        onStickerSelected = { sticker ->
+                            if (conversationId != null) {
+                                chatViewModel.sendSticker(conversationId, sticker.id)
+                            }
+                            isStickerPanelVisible = false
+                        }
+                    )
                 }
             }
         }
@@ -160,32 +190,219 @@ fun ChatScreen(navController: NavController, conversationId: String?) {
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(horizontal = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    items(uiState.filteredMessages) { message ->
-                        MessageBubble(
-                            message = message,
-                            searchQuery = uiState.searchQuery,
-                            isSelected = selectedMessageId == message.id,
-                            onLongClick = {
-                                selectedMessageId = if (selectedMessageId == message.id) null else message.id
-                            },
-                            onReaction = { emoji ->
-                                if (conversationId != null) {
-                                    chatViewModel.onReactionClick(conversationId, message.id, emoji)
-                                }
-                                selectedMessageId = null
-                            },
-                            onPin = {
-                                if (conversationId != null) {
-                                    chatViewModel.onPinMessageClick(conversationId, message)
-                                }
-                                selectedMessageId = null
+                    items(
+                        items = uiState.chatItems,
+                        key = { item ->
+                            when (item) {
+                                is ChatItem.DateHeader -> item.date
+                                is ChatItem.MessageItem -> item.message.id
                             }
-                        )
+                        }
+                    ) { item ->
+                        when (item) {
+                            is ChatItem.DateHeader -> {
+                                DateHeader(date = item.date)
+                            }
+                            is ChatItem.MessageItem -> {
+                                MessageBubble(
+                                    message = item.message,
+                                    searchQuery = uiState.searchQuery,
+                                    isSelected = selectedMessageId == item.message.id,
+                                    onLongClick = {
+                                        selectedMessageId = if (selectedMessageId == item.message.id) null else item.message.id
+                                    },
+                                    onReaction = { emoji ->
+                                        if (conversationId != null) {
+                                            chatViewModel.onReactionClick(conversationId, item.message.id, emoji)
+                                        }
+                                        selectedMessageId = null
+                                    },
+                                    onPin = {
+                                        if (conversationId != null) {
+                                            chatViewModel.onPinMessageClick(conversationId, item.message)
+                                        }
+                                        selectedMessageId = null
+                                    }
+                                )
+                            }
+                        }
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+fun ChatInputBar(
+    text: String,
+    onTextChange: (String) -> Unit,
+    onSendClick: () -> Unit,
+    onStickerClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        IconButton(onClick = onStickerClick) {
+            Icon(Icons.Default.Mood, contentDescription = "Abrir figurinhas")
+        }
+        OutlinedTextField(
+            value = text,
+            onValueChange = onTextChange,
+            modifier = Modifier.weight(1f),
+            placeholder = { Text("Digite uma mensagem...") }
+        )
+        IconButton(onClick = onSendClick) {
+            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Enviar")
+        }
+    }
+}
+
+@Composable
+fun StickerPanel(onStickerSelected: (Sticker) -> Unit) {
+    LazyVerticalGrid(
+        columns = GridCells.Adaptive(minSize = 80.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(200.dp)
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(8.dp)
+    ) {
+        items(stickerList) { sticker ->
+            Image(
+                painter = painterResource(id = sticker.resourceId),
+                contentDescription = "Figurinha ${sticker.id}",
+                modifier = Modifier
+                    .size(72.dp)
+                    .padding(4.dp)
+                    .clickable { onStickerSelected(sticker) }
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
+@Composable
+fun MessageBubble(
+    message: Message,
+    searchQuery: String,
+    isSelected: Boolean,
+    onLongClick: () -> Unit,
+    onReaction: (String) -> Unit,
+    onPin: () -> Unit
+) {
+    val alignment = if (message.senderId == FirebaseAuth.getInstance().currentUser?.uid) Alignment.End else Alignment.Start
+
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        horizontalAlignment = alignment
+    ) {
+        AnimatedVisibility(visible = isSelected) {
+            EmojiPicker(onReaction = onReaction, onPin = onPin)
+        }
+
+        if (message.type == "STICKER") {
+            StickerMessage(message = message, onLongClick = onLongClick)
+        } else {
+            TextMessage(message = message, searchQuery = searchQuery, onLongClick = onLongClick)
+        }
+
+        if (message.reactions.isNotEmpty()) {
+            FlowRow(modifier = Modifier.padding(top = 2.dp)) {
+                message.reactions.entries.groupBy { it.value }
+                    .forEach { (emoji, userEntries) ->
+                        ReactionDisplay(emoji = emoji, count = userEntries.size)
+                    }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun TextMessage(message: Message, searchQuery: String, onLongClick: () -> Unit) {
+    val isSentByCurrentUser = message.senderId == FirebaseAuth.getInstance().currentUser?.uid
+    val bubbleColor = if (isSentByCurrentUser) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer
+
+    Box(
+        modifier = Modifier
+            .widthIn(max = 300.dp)
+            .combinedClickable(
+                onClick = { /* Ação de clique normal */ },
+                onLongClick = onLongClick
+            )
+    ) {
+        Column(
+            modifier = Modifier
+                .clip(RoundedCornerShape(16.dp))
+                .background(bubbleColor)
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalAlignment = if (isSentByCurrentUser) Alignment.End else Alignment.Start
+        ) {
+            HighlightingText(text = message.text, query = searchQuery)
+            Spacer(modifier = Modifier.height(4.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = formatTimestamp(message.timestamp),
+                    style = MaterialTheme.typography.bodySmall,
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                )
+                if (isSentByCurrentUser) {
+                    Spacer(modifier = Modifier.width(4.dp))
+                    MessageStatusIcon(message = message)
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun StickerMessage(message: Message, onLongClick: () -> Unit) {
+    val context = LocalContext.current
+    val resourceId = remember(message.stickerId) {
+        context.resources.getIdentifier(message.stickerId, "drawable", context.packageName)
+    }
+
+    if (resourceId != 0) {
+        Image(
+            painter = painterResource(id = resourceId),
+            contentDescription = "Figurinha ${message.stickerId}",
+            modifier = Modifier
+                .size(128.dp)
+                .combinedClickable(
+                    onClick = {},
+                    onLongClick = onLongClick
+                )
+        )
+    } else {
+        TextMessage(message = message.copy(text = "[Figurinha inválida]"), searchQuery = "", onLongClick = onLongClick)
+    }
+}
+
+@Composable
+fun DateHeader(date: String) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.secondaryContainer,
+            tonalElevation = 1.dp
+        ) {
+            Text(
+                text = date,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+            )
         }
     }
 }
@@ -215,75 +432,6 @@ fun PinnedMessageView(message: Message) {
                 overflow = TextOverflow.Ellipsis,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-        }
-    }
-}
-
-
-@OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
-@Composable
-fun MessageBubble(
-    message: Message,
-    searchQuery: String,
-    isSelected: Boolean,
-    onLongClick: () -> Unit,
-    onReaction: (String) -> Unit,
-    onPin: () -> Unit
-) {
-    val currentUserId = FirebaseAuth.getInstance().currentUser?.uid
-    val isSentByCurrentUser = message.senderId == currentUserId
-    val alignment = if (isSentByCurrentUser) Alignment.End else Alignment.Start
-    val bubbleColor = if (isSentByCurrentUser) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer
-
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalAlignment = alignment
-    ) {
-        AnimatedVisibility(visible = isSelected) {
-            EmojiPicker(onReaction = onReaction, onPin = onPin)
-        }
-        Box(
-            modifier = Modifier
-                .widthIn(max = 300.dp)
-                .combinedClickable(
-                    onClick = { /* Pode ser usado para selecionar a msg no futuro */ },
-                    onLongClick = onLongClick,
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null
-                )
-        ) {
-            Column(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(bubbleColor)
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                horizontalAlignment = if (isSentByCurrentUser) Alignment.End else Alignment.Start
-            ) {
-                HighlightingText(text = message.text, query = searchQuery)
-                Spacer(modifier = Modifier.height(4.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = formatTimestamp(message.timestamp),
-                        style = MaterialTheme.typography.bodySmall,
-                        fontSize = 10.sp,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                    )
-                    if (isSentByCurrentUser) {
-                        Spacer(modifier = Modifier.width(4.dp))
-                        MessageStatusIcon(message = message)
-                    }
-                }
-            }
-        }
-        if (message.reactions.isNotEmpty()) {
-            FlowRow(
-                modifier = Modifier.padding(top = 2.dp)
-            ) {
-                message.reactions.entries.groupBy { it.value }
-                    .forEach { (emoji, userEntries) ->
-                        ReactionDisplay(emoji = emoji, count = userEntries.size)
-                    }
-            }
         }
     }
 }

@@ -9,7 +9,8 @@ import com.example.app_mensagem.data.model.Conversation
 import com.example.app_mensagem.data.model.Message
 import com.example.app_mensagem.data.model.User
 
-@Database(entities = [User::class, Conversation::class, Message::class], version = 3, exportSchema = false)
+// INCREMENTE A VERSÃO DO BANCO DE DADOS PARA 4
+@Database(entities = [User::class, Conversation::class, Message::class], version = 4, exportSchema = false)
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
 

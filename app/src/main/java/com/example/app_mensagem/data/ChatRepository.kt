@@ -99,16 +99,54 @@ class ChatRepository(
             senderId = currentUserId,
             text = text,
             timestamp = System.currentTimeMillis(),
-            status = "SENDING"
+            status = "SENDING",
+            type = "TEXT" // Garante que o tipo é texto
+        )
+        messageDao.insertOrUpdate(message)
+
+        val messageForFirebase = message.copy(status = "SENT")
+
+        try {
+            messagesRef.child(messageId).setValue(messageForFirebase).await()
+            messageDao.insertOrUpdate(message.copy(status = "SENT"))
+
+            val lastMessageUpdate = mapOf("lastMessage" to text, "timestamp" to message.timestamp)
+            val userIds = conversationId.split("-")
+            if (userIds.size == 2) {
+                database.getReference("user-conversations/${userIds[0]}/$conversationId").updateChildren(lastMessageUpdate)
+                database.getReference("user-conversations/${userIds[1]}/$conversationId").updateChildren(lastMessageUpdate)
+            }
+        } catch (e: Exception) {
+            messageDao.insertOrUpdate(message.copy(status = "FAILED"))
+        }
+    }
+
+    // NOVA FUNÇÃO PARA ENVIAR STICKERS
+    suspend fun sendSticker(conversationId: String, stickerId: String) {
+        val currentUserId = auth.currentUser?.uid ?: return
+        val messagesRef = database.getReference("messages").child(conversationId)
+        val messageId = messagesRef.push().key ?: return
+
+        val message = Message(
+            id = messageId,
+            conversationId = conversationId,
+            senderId = currentUserId,
+            text = "Figurinha", // Texto alternativo para notificações e preview
+            timestamp = System.currentTimeMillis(),
+            status = "SENDING",
+            type = "STICKER",
+            stickerId = stickerId
         )
 
         messageDao.insertOrUpdate(message)
 
+        val messageForFirebase = message.copy(status = "SENT")
+
         try {
-            messagesRef.child(messageId).setValue(message).await()
+            messagesRef.child(messageId).setValue(messageForFirebase).await()
             messageDao.insertOrUpdate(message.copy(status = "SENT"))
 
-            val lastMessageUpdate = mapOf("lastMessage" to text, "timestamp" to message.timestamp)
+            val lastMessageUpdate = mapOf("lastMessage" to "Figurinha", "timestamp" to message.timestamp)
             val userIds = conversationId.split("-")
             if (userIds.size == 2) {
                 database.getReference("user-conversations/${userIds[0]}/$conversationId").updateChildren(lastMessageUpdate)
