@@ -30,20 +30,21 @@ class ChatRepository(
     private val auth: FirebaseAuth = FirebaseAuth.getInstance()
     private val database: FirebaseDatabase = FirebaseDatabase.getInstance()
 
-    suspend fun toggleReaction(conversationId: String, messageId: String, emoji: String) {
-        val currentUserId = auth.currentUser?.uid ?: return
-        val messageRef = database.getReference("messages/$conversationId/$messageId")
+    fun getConversations(): Flow<List<Conversation>> {
+        val userId = auth.currentUser?.uid ?: return flowOf(emptyList())
 
-        val snapshot = messageRef.child("reactions").get().await()
-        val reactions = snapshot.getValue<MutableMap<String, String>>() ?: mutableMapOf()
+        val conversationsRef = database.getReference("user-conversations").child(userId)
+        conversationsRef.addValueEventListener(object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                val conversations = snapshot.children.mapNotNull { it.getValue(Conversation::class.java) }
+                CoroutineScope(Dispatchers.IO).launch {
+                    conversations.forEach { conversationDao.insertOrUpdate(it) }
+                }
+            }
+            override fun onCancelled(error: DatabaseError) { }
+        })
 
-        if (reactions[currentUserId] == emoji) {
-            reactions.remove(currentUserId)
-        } else {
-            reactions[currentUserId] = emoji
-        }
-
-        messageRef.child("reactions").setValue(reactions).await()
+        return conversationDao.getAllConversations()
     }
 
     fun getMessagesForConversation(conversationId: String): Flow<List<Message>> {
@@ -60,7 +61,6 @@ class ChatRepository(
                 CoroutineScope(Dispatchers.IO).launch {
                     messages.forEach { message ->
                         messageDao.insertOrUpdate(message)
-                        // Lógica de confirmação de entrega
                         if (message.senderId != currentUserId && message.deliveredTimestamp == 0L) {
                             confirmDelivery(conversationId, message.id)
                         }
@@ -86,24 +86,6 @@ class ChatRepository(
                     .child("readTimestamp").setValue(System.currentTimeMillis())
             }
         }
-    }
-
-    // O resto do repositório permanece o mesmo...
-    fun getConversations(): Flow<List<Conversation>> {
-        val userId = auth.currentUser?.uid ?: return flowOf(emptyList())
-
-        val conversationsRef = database.getReference("user-conversations").child(userId)
-        conversationsRef.addValueEventListener(object : ValueEventListener {
-            override fun onDataChange(snapshot: DataSnapshot) {
-                val conversations = snapshot.children.mapNotNull { it.getValue(Conversation::class.java) }
-                CoroutineScope(Dispatchers.IO).launch {
-                    conversations.forEach { conversationDao.insertOrUpdate(it) }
-                }
-            }
-            override fun onCancelled(error: DatabaseError) { }
-        })
-
-        return conversationDao.getAllConversations()
     }
 
     suspend fun sendMessage(conversationId: String, text: String) {
@@ -197,5 +179,44 @@ class ChatRepository(
             .addOnFailureListener {
                 continuation.resume(null)
             }
+    }
+
+    suspend fun getMessageById(conversationId: String, messageId: String): Message? {
+        val snapshot = database.getReference("messages/$conversationId/$messageId").get().await()
+        return snapshot.getValue(Message::class.java)
+    }
+
+    suspend fun togglePinMessage(conversationId: String, message: Message) {
+        val currentUserId = auth.currentUser?.uid ?: return
+        val otherUserId = conversationId.replace(currentUserId, "").replace("-", "")
+
+        val conversationRefCurrentUser = database.getReference("user-conversations/$currentUserId/$conversationId")
+
+        val currentConversation = conversationRefCurrentUser.get().await().getValue(Conversation::class.java)
+
+        val newPinnedId = if (currentConversation?.pinnedMessageId == message.id) {
+            null
+        } else {
+            message.id
+        }
+
+        conversationRefCurrentUser.child("pinnedMessageId").setValue(newPinnedId).await()
+        database.getReference("user-conversations/$otherUserId/$conversationId").child("pinnedMessageId").setValue(newPinnedId).await()
+    }
+
+    suspend fun toggleReaction(conversationId: String, messageId: String, emoji: String) {
+        val currentUserId = auth.currentUser?.uid ?: return
+        val messageRef = database.getReference("messages/$conversationId/$messageId")
+
+        val snapshot = messageRef.child("reactions").get().await()
+        val reactions = snapshot.getValue<MutableMap<String, String>>() ?: mutableMapOf()
+
+        if (reactions[currentUserId] == emoji) {
+            reactions.remove(currentUserId)
+        } else {
+            reactions[currentUserId] = emoji
+        }
+
+        messageRef.child("reactions").setValue(reactions).await()
     }
 }

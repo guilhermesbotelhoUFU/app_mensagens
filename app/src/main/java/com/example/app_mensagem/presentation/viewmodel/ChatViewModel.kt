@@ -15,7 +15,10 @@ import kotlinx.coroutines.launch
 
 data class ChatUiState(
     val messages: List<Message> = emptyList(),
+    val filteredMessages: List<Message> = emptyList(),
+    val searchQuery: String = "",
     val conversationTitle: String = "",
+    val pinnedMessage: Message? = null,
     val isLoading: Boolean = true,
     val error: String? = null
 )
@@ -33,10 +36,28 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         repository = ChatRepository(db.conversationDao(), db.messageDao())
     }
 
+    fun onSearchQueryChanged(query: String) {
+        _uiState.value = _uiState.value.copy(searchQuery = query)
+        val filteredList = if (query.isBlank()) {
+            _uiState.value.messages
+        } else {
+            _uiState.value.messages.filter {
+                it.text.contains(query, ignoreCase = true)
+            }
+        }
+        _uiState.value = _uiState.value.copy(filteredMessages = filteredList)
+    }
+
     fun loadMessages(conversationId: String) {
         viewModelScope.launch {
             repository.getConversationDetails(conversationId)?.let { conversation ->
                 _uiState.value = _uiState.value.copy(conversationTitle = conversation.name)
+                if (conversation.pinnedMessageId != null) {
+                    val pinnedMessage = repository.getMessageById(conversationId, conversation.pinnedMessageId)
+                    _uiState.value = _uiState.value.copy(pinnedMessage = pinnedMessage)
+                } else {
+                    _uiState.value = _uiState.value.copy(pinnedMessage = null)
+                }
             }
 
             repository.getMessagesForConversation(conversationId)
@@ -49,17 +70,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 .collect { messages ->
                     _uiState.value = _uiState.value.copy(
                         messages = messages,
+                        filteredMessages = messages, // Inicialmente, a lista filtrada é a lista completa
                         isLoading = false
                     )
-                    // Lógica para marcar mensagens como lidas
                     repository.markMessagesAsRead(conversationId, messages)
                 }
-        }
-    }
-
-    fun onReactionClick(conversationId: String, messageId: String, emoji: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            repository.toggleReaction(conversationId, messageId, emoji)
         }
     }
 
@@ -72,6 +87,23 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.value = _uiState.value.copy(
                     error = e.message ?: "Erro ao enviar mensagem"
                 )
+            }
+        }
+    }
+
+    fun onReactionClick(conversationId: String, messageId: String, emoji: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.toggleReaction(conversationId, messageId, emoji)
+        }
+    }
+
+    fun onPinMessageClick(conversationId: String, message: Message) {
+        viewModelScope.launch {
+            try {
+                repository.togglePinMessage(conversationId, message)
+                loadMessages(conversationId)
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(error = e.message ?: "Falha ao fixar mensagem")
             }
         }
     }

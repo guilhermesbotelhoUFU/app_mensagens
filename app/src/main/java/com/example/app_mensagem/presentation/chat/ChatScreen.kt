@@ -15,10 +15,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.DoneAll
-import androidx.compose.material.icons.filled.Error
-import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -26,7 +23,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -39,8 +41,9 @@ import com.google.firebase.auth.FirebaseAuth
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.regex.Pattern
 
-@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ChatScreen(navController: NavController, conversationId: String?) {
     val chatViewModel: ChatViewModel = viewModel()
@@ -48,6 +51,7 @@ fun ChatScreen(navController: NavController, conversationId: String?) {
     var text by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
     var selectedMessageId by remember { mutableStateOf<String?>(null) }
+    var isSearchActive by remember { mutableStateOf(false) }
 
     LaunchedEffect(conversationId) {
         if (conversationId != null) {
@@ -55,21 +59,63 @@ fun ChatScreen(navController: NavController, conversationId: String?) {
         }
     }
 
-    LaunchedEffect(uiState.messages.size) {
-        if (uiState.messages.isNotEmpty()) {
-            listState.animateScrollToItem(uiState.messages.size - 1)
+    LaunchedEffect(uiState.filteredMessages.size) {
+        // Rola para o final apenas se a busca não estiver ativa
+        if (uiState.searchQuery.isBlank() && uiState.filteredMessages.isNotEmpty()) {
+            listState.animateScrollToItem(uiState.filteredMessages.size - 1)
         }
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(uiState.conversationTitle) },
-                navigationIcon = {
-                    IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Voltar")
+                title = {
+                    if (isSearchActive) {
+                        TextField(
+                            value = uiState.searchQuery,
+                            onValueChange = { chatViewModel.onSearchQueryChanged(it) },
+                            placeholder = { Text("Buscar na conversa...") },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = TextFieldDefaults.colors(
+                                focusedContainerColor = Color.Transparent,
+                                unfocusedContainerColor = Color.Transparent,
+                                disabledContainerColor = Color.Transparent,
+                                focusedIndicatorColor = Color.Transparent,
+                                unfocusedIndicatorColor = Color.Transparent,
+                                cursorColor = MaterialTheme.colorScheme.onPrimary,
+                                focusedTextColor = MaterialTheme.colorScheme.onPrimary
+                            ),
+                            textStyle = LocalTextStyle.current.copy(color = MaterialTheme.colorScheme.onPrimary)
+                        )
+                    } else {
+                        Text(uiState.conversationTitle)
                     }
-                }
+                },
+                navigationIcon = {
+                    if (isSearchActive) {
+                        IconButton(onClick = {
+                            isSearchActive = false
+                            chatViewModel.onSearchQueryChanged("")
+                        }) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Fechar Busca", tint = MaterialTheme.colorScheme.onPrimary)
+                        }
+                    } else {
+                        IconButton(onClick = { navController.popBackStack() }) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Voltar", tint = MaterialTheme.colorScheme.onPrimary)
+                        }
+                    }
+                },
+                actions = {
+                    if (!isSearchActive) {
+                        IconButton(onClick = { isSearchActive = true }) {
+                            Icon(Icons.Default.Search, contentDescription = "Buscar Mensagem", tint = MaterialTheme.colorScheme.onPrimary)
+                        }
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    titleContentColor = MaterialTheme.colorScheme.onPrimary
+                )
             )
         },
         bottomBar = {
@@ -96,47 +142,93 @@ fun ChatScreen(navController: NavController, conversationId: String?) {
             }
         }
     ) { paddingValues ->
-        if (uiState.isLoading) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
+        Column(modifier = Modifier
+            .fillMaxSize()
+            .padding(paddingValues)) {
+
+            AnimatedVisibility(visible = uiState.pinnedMessage != null && !isSearchActive) {
+                uiState.pinnedMessage?.let { PinnedMessageView(message = it) }
             }
-        } else {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(paddingValues)
-                    .padding(horizontal = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                items(uiState.messages) { message ->
-                    MessageBubble(
-                        message = message,
-                        isSelected = selectedMessageId == message.id,
-                        onLongClick = {
-                            // Se o mesmo item for selecionado, deseleciona, senão seleciona o novo
-                            selectedMessageId = if (selectedMessageId == message.id) null else message.id
-                        },
-                        onReaction = { emoji ->
-                            if (conversationId != null) {
-                                chatViewModel.onReactionClick(conversationId, message.id, emoji)
+
+            if (uiState.isLoading) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
+                }
+            } else {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    items(uiState.filteredMessages) { message ->
+                        MessageBubble(
+                            message = message,
+                            searchQuery = uiState.searchQuery,
+                            isSelected = selectedMessageId == message.id,
+                            onLongClick = {
+                                selectedMessageId = if (selectedMessageId == message.id) null else message.id
+                            },
+                            onReaction = { emoji ->
+                                if (conversationId != null) {
+                                    chatViewModel.onReactionClick(conversationId, message.id, emoji)
+                                }
+                                selectedMessageId = null
+                            },
+                            onPin = {
+                                if (conversationId != null) {
+                                    chatViewModel.onPinMessageClick(conversationId, message)
+                                }
+                                selectedMessageId = null
                             }
-                            selectedMessageId = null
-                        }
-                    )
+                        )
+                    }
                 }
             }
         }
     }
 }
 
+@Composable
+fun PinnedMessageView(message: Message) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        tonalElevation = 2.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Default.PushPin,
+                contentDescription = "Mensagem Fixada",
+                modifier = Modifier.size(16.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = message.text,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+
 @OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
 fun MessageBubble(
     message: Message,
+    searchQuery: String,
     isSelected: Boolean,
     onLongClick: () -> Unit,
-    onReaction: (String) -> Unit
+    onReaction: (String) -> Unit,
+    onPin: () -> Unit
 ) {
     val currentUserId = FirebaseAuth.getInstance().currentUser?.uid
     val isSentByCurrentUser = message.senderId == currentUserId
@@ -148,7 +240,7 @@ fun MessageBubble(
         horizontalAlignment = alignment
     ) {
         AnimatedVisibility(visible = isSelected) {
-            EmojiPicker(onReaction = onReaction)
+            EmojiPicker(onReaction = onReaction, onPin = onPin)
         }
         Box(
             modifier = Modifier
@@ -157,7 +249,7 @@ fun MessageBubble(
                     onClick = { /* Pode ser usado para selecionar a msg no futuro */ },
                     onLongClick = onLongClick,
                     interactionSource = remember { MutableInteractionSource() },
-                    indication = null // Remove o efeito visual de clique
+                    indication = null
                 )
         ) {
             Column(
@@ -167,7 +259,7 @@ fun MessageBubble(
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 horizontalAlignment = if (isSentByCurrentUser) Alignment.End else Alignment.Start
             ) {
-                Text(text = message.text, textAlign = TextAlign.Start)
+                HighlightingText(text = message.text, query = searchQuery)
                 Spacer(modifier = Modifier.height(4.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
@@ -197,14 +289,17 @@ fun MessageBubble(
 }
 
 @Composable
-fun EmojiPicker(onReaction: (String) -> Unit) {
+fun EmojiPicker(onReaction: (String) -> Unit, onPin: () -> Unit) {
     val emojis = listOf("👍", "❤️", "😂", "😯", "😢", "🙏")
     Surface(
-        shape = CircleShape,
+        shape = RoundedCornerShape(24.dp),
         tonalElevation = 4.dp,
         modifier = Modifier.padding(bottom = 4.dp)
     ) {
-        Row(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             emojis.forEach { emoji ->
                 Text(
                     text = emoji,
@@ -215,6 +310,17 @@ fun EmojiPicker(onReaction: (String) -> Unit) {
                             indication = null
                         ) { onReaction(emoji) }
                         .padding(4.dp)
+                )
+            }
+            Divider(modifier = Modifier
+                .height(24.dp)
+                .width(1.dp)
+                .padding(horizontal = 4.dp))
+            IconButton(onClick = onPin, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    imageVector = Icons.Default.PushPin,
+                    contentDescription = "Fixar Mensagem",
+                    modifier = Modifier.size(20.dp)
                 )
             }
         }
@@ -239,7 +345,7 @@ fun MessageStatusIcon(message: Message) {
     val (icon, color) = when {
         message.status == "FAILED" -> Icons.Default.Error to MaterialTheme.colorScheme.error
         message.status == "SENDING" -> Icons.Default.Schedule to MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-        message.readTimestamp > 0 -> Icons.Default.DoneAll to Color.Blue // Cor de destaque para lido
+        message.readTimestamp > 0 -> Icons.Default.DoneAll to Color.Blue
         message.deliveredTimestamp > 0 -> Icons.Default.DoneAll to MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
         else -> Icons.Default.Check to MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
     }
@@ -256,6 +362,38 @@ private fun formatTimestamp(timestamp: Long): String {
     val messageDate = Date(timestamp)
     val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
     return sdf.format(messageDate)
+}
+
+@Composable
+fun HighlightingText(text: String, query: String) {
+    if (query.isBlank()) {
+        Text(text = text, textAlign = TextAlign.Start)
+        return
+    }
+
+    val annotatedString = buildAnnotatedString {
+        val pattern = Pattern.compile(query, Pattern.LITERAL or Pattern.CASE_INSENSITIVE)
+        val matcher = pattern.matcher(text)
+
+        var lastEnd = 0
+        while (matcher.find()) {
+            val start = matcher.start()
+            val end = matcher.end()
+
+            if (start > lastEnd) {
+                append(text.substring(lastEnd, start))
+            }
+
+            withStyle(style = SpanStyle(background = Color.Yellow, fontWeight = FontWeight.Bold)) {
+                append(text.substring(start, end))
+            }
+            lastEnd = end
+        }
+        if (lastEnd < text.length) {
+            append(text.substring(lastEnd))
+        }
+    }
+    Text(text = annotatedString, textAlign = TextAlign.Start)
 }
 
 @Preview(showBackground = true)

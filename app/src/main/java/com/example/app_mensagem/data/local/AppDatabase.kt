@@ -9,7 +9,7 @@ import com.example.app_mensagem.data.model.Conversation
 import com.example.app_mensagem.data.model.Message
 import com.example.app_mensagem.data.model.User
 
-@Database(entities = [User::class, Conversation::class, Message::class], version = 2, exportSchema = false)
+@Database(entities = [User::class, Conversation::class, Message::class], version = 3, exportSchema = false)
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
 
@@ -27,7 +27,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "app_mensagem_database"
                 )
-                    .fallbackToDestructiveMigration() // Para desenvolvimento, apaga o db em caso de mudança de versão
+                    .fallbackToDestructiveMigration()
                     .build()
                 INSTANCE = instance
                 instance

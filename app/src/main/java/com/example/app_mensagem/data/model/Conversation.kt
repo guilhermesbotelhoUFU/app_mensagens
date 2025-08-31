@@ -8,5 +8,6 @@ data class Conversation(
     @PrimaryKey val id: String = "",
     val name: String = "",
     val lastMessage: String = "",
-    val timestamp: Long = 0L
+    val timestamp: Long = 0L,
+    val pinnedMessageId: String? = null
 )
