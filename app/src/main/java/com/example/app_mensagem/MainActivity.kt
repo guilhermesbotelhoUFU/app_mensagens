@@ -25,6 +25,7 @@ import com.example.app_mensagem.presentation.auth.SignUpScreen
 import com.example.app_mensagem.presentation.chat.ChatScreen
 import com.example.app_mensagem.presentation.contacts.ContactsScreen
 import com.example.app_mensagem.presentation.home.HomeScreen
+import com.example.app_mensagem.presentation.profile.ProfileScreen
 import com.example.app_mensagem.presentation.viewmodel.*
 import com.example.app_mensagem.ui.theme.App_mensagemTheme
 import com.google.firebase.auth.FirebaseAuth
@@ -94,6 +95,9 @@ class MainActivity : ComponentActivity() {
                         ) { backStackEntry ->
                             val conversationId = backStackEntry.arguments?.getString("conversationId")
                             ChatScreen(navController, conversationId)
+                        }
+                        composable("profile") {
+                            ProfileScreen(navController)
                         }
                     }
                 }

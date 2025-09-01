@@ -1,12 +1,12 @@
 package com.example.app_mensagem.presentation.viewmodel
 
 import android.app.Application
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.app_mensagem.MyApplication
 import com.example.app_mensagem.data.ChatRepository
 import com.example.app_mensagem.data.model.Message
-import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -20,20 +20,25 @@ data class ChatUiState(
     val conversationTitle: String = "",
     val pinnedMessage: Message? = null,
     val isLoading: Boolean = true,
-    val error: String? = null
+    val error: String? = null,
+    val mediaToSendUri: Uri? = null,
+    val mediaType: String? = null // "IMAGE" or "VIDEO"
 )
 
 class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository: ChatRepository
-    private val auth: FirebaseAuth = FirebaseAuth.getInstance()
 
     private val _uiState = MutableStateFlow(ChatUiState())
     val uiState: StateFlow<ChatUiState> = _uiState
 
     init {
         val db = (application as MyApplication).database
-        repository = ChatRepository(db.conversationDao(), db.messageDao())
+        repository = ChatRepository(db.conversationDao(), db.messageDao(), application)
+    }
+
+    fun onMediaSelected(uri: Uri?, type: String) {
+        _uiState.value = _uiState.value.copy(mediaToSendUri = uri, mediaType = type)
     }
 
     fun onSearchQueryChanged(query: String) {
@@ -42,7 +47,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.value.messages
         } else {
             _uiState.value.messages.filter {
-                it.text.contains(query, ignoreCase = true)
+                it.content.contains(query, ignoreCase = true) && it.type == "TEXT"
             }
         }
         _uiState.value = _uiState.value.copy(filteredMessages = filteredList)
@@ -70,7 +75,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 .collect { messages ->
                     _uiState.value = _uiState.value.copy(
                         messages = messages,
-                        filteredMessages = messages, // Inicialmente, a lista filtrada é a lista completa
+                        filteredMessages = if (_uiState.value.searchQuery.isBlank()) messages else _uiState.value.filteredMessages,
                         isLoading = false
                     )
                     repository.markMessagesAsRead(conversationId, messages)
@@ -79,10 +84,20 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun sendMessage(conversationId: String, text: String) {
-        if (text.isBlank()) return
         viewModelScope.launch {
             try {
-                repository.sendMessage(conversationId, text)
+                val mediaUri = _uiState.value.mediaToSendUri
+                val mediaType = _uiState.value.mediaType
+
+                if (mediaUri != null) {
+                    when (mediaType) {
+                        "IMAGE" -> repository.sendImageMessage(conversationId, mediaUri)
+                        "VIDEO" -> repository.sendVideoMessage(conversationId, mediaUri)
+                    }
+                    _uiState.value = _uiState.value.copy(mediaToSendUri = null, mediaType = null)
+                } else if (text.isNotBlank()) {
+                    repository.sendMessage(conversationId, text)
+                }
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     error = e.message ?: "Erro ao enviar mensagem"

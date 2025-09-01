@@ -1,5 +1,13 @@
 package com.example.app_mensagem.data
 
+import android.content.Context
+import android.graphics.Bitmap
+import android.media.MediaMetadataRetriever
+import android.media.ThumbnailUtils
+import android.net.Uri
+import android.os.Build
+import android.provider.MediaStore
+import android.util.Size
 import com.example.app_mensagem.data.local.ConversationDao
 import com.example.app_mensagem.data.local.MessageDao
 import com.example.app_mensagem.data.model.Conversation
@@ -11,6 +19,7 @@ import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ValueEventListener
 import com.google.firebase.database.getValue
+import com.google.firebase.storage.FirebaseStorage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
@@ -19,16 +28,20 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
+import java.io.ByteArrayOutputStream
+import java.util.UUID
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
 
 class ChatRepository(
     private val conversationDao: ConversationDao,
-    private val messageDao: MessageDao
+    private val messageDao: MessageDao,
+    private val context: Context
 ) {
 
     private val auth: FirebaseAuth = FirebaseAuth.getInstance()
     private val database: FirebaseDatabase = FirebaseDatabase.getInstance()
+    private val storage = FirebaseStorage.getInstance()
 
     fun getConversations(): Flow<List<Conversation>> {
         val userId = auth.currentUser?.uid ?: return flowOf(emptyList())
@@ -97,7 +110,8 @@ class ChatRepository(
             id = messageId,
             conversationId = conversationId,
             senderId = currentUserId,
-            text = text,
+            content = text,
+            type = "TEXT",
             timestamp = System.currentTimeMillis(),
             status = "SENDING"
         )
@@ -116,6 +130,88 @@ class ChatRepository(
             }
         } catch (e: Exception) {
             messageDao.insertOrUpdate(message.copy(status = "FAILED"))
+        }
+    }
+
+    suspend fun sendImageMessage(conversationId: String, imageUri: Uri) {
+        val currentUserId = auth.currentUser?.uid ?: return
+        val messagesRef = database.getReference("messages").child(conversationId)
+        val messageId = messagesRef.push().key ?: return
+
+        val imageFileName = "${UUID.randomUUID()}.jpg"
+        val storageRef = storage.getReference("images/$conversationId/$imageFileName")
+        storageRef.putFile(imageUri).await()
+        val downloadUrl = storageRef.downloadUrl.await().toString()
+
+        val message = Message(
+            id = messageId,
+            conversationId = conversationId,
+            senderId = currentUserId,
+            content = downloadUrl,
+            type = "IMAGE",
+            timestamp = System.currentTimeMillis(),
+            status = "SENT"
+        )
+
+        messagesRef.child(messageId).setValue(message).await()
+        messageDao.insertOrUpdate(message)
+
+        val lastMessageUpdate = mapOf("lastMessage" to "📷 Imagem", "timestamp" to message.timestamp)
+        val userIds = conversationId.split("-")
+        if (userIds.size == 2) {
+            database.getReference("user-conversations/${userIds[0]}/$conversationId").updateChildren(lastMessageUpdate)
+            database.getReference("user-conversations/${userIds[1]}/$conversationId").updateChildren(lastMessageUpdate)
+        }
+    }
+
+    suspend fun sendVideoMessage(conversationId: String, videoUri: Uri) {
+        val currentUserId = auth.currentUser?.uid ?: return
+        val messagesRef = database.getReference("messages").child(conversationId)
+        val messageId = messagesRef.push().key ?: return
+
+        // Bloco corrigido para gerar a thumbnail
+        val thumbnailBitmap: Bitmap? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            context.contentResolver.loadThumbnail(videoUri, Size(240, 240), null)
+        } else {
+            val retriever = MediaMetadataRetriever()
+            retriever.setDataSource(context, videoUri)
+            val bitmap = retriever.getFrameAtTime(1000000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+            retriever.release()
+            bitmap
+        }
+
+        val baos = ByteArrayOutputStream()
+        thumbnailBitmap?.compress(Bitmap.CompressFormat.JPEG, 70, baos)
+        val thumbnailData = baos.toByteArray()
+        val thumbnailFileName = "${UUID.randomUUID()}.jpg"
+        val thumbnailStorageRef = storage.getReference("thumbnails/$conversationId/$thumbnailFileName")
+        thumbnailStorageRef.putBytes(thumbnailData).await()
+        val thumbnailUrl = thumbnailStorageRef.downloadUrl.await().toString()
+
+        val videoFileName = "${UUID.randomUUID()}.mp4"
+        val videoStorageRef = storage.getReference("videos/$conversationId/$videoFileName")
+        videoStorageRef.putFile(videoUri).await()
+        val videoUrl = videoStorageRef.downloadUrl.await().toString()
+
+        val message = Message(
+            id = messageId,
+            conversationId = conversationId,
+            senderId = currentUserId,
+            content = videoUrl,
+            type = "VIDEO",
+            thumbnailUrl = thumbnailUrl,
+            timestamp = System.currentTimeMillis(),
+            status = "SENT"
+        )
+
+        messagesRef.child(messageId).setValue(message).await()
+        messageDao.insertOrUpdate(message)
+
+        val lastMessageUpdate = mapOf("lastMessage" to "🎥 Vídeo", "timestamp" to message.timestamp)
+        val userIds = conversationId.split("-")
+        if (userIds.size == 2) {
+            database.getReference("user-conversations/${userIds[0]}/$conversationId").updateChildren(lastMessageUpdate)
+            database.getReference("user-conversations/${userIds[1]}/$conversationId").updateChildren(lastMessageUpdate)
         }
     }
 

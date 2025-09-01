@@ -5,12 +5,16 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -35,39 +39,79 @@ fun HomeScreen(
     conversationsViewModel: ConversationsViewModel = viewModel()
 ) {
     var showMenu by remember { mutableStateOf(false) }
+    var isSearchActive by remember { mutableStateOf(false) }
     val conversationState by conversationsViewModel.uiState.collectAsState()
-
-    // O BLOCO LaunchedEffect FOI REMOVIDO DAQUI
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Conversas") },
+                title = {
+                    if (isSearchActive) {
+                        val searchQuery = (conversationState as? ConversationUiState.Success)?.searchQuery ?: ""
+                        TextField(
+                            value = searchQuery,
+                            onValueChange = { conversationsViewModel.onSearchQueryChanged(it) },
+                            placeholder = { Text("Buscar conversas...") },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = TextFieldDefaults.colors(
+                                focusedContainerColor = Color.Transparent,
+                                unfocusedContainerColor = Color.Transparent,
+                                disabledContainerColor = Color.Transparent,
+                                focusedIndicatorColor = Color.Transparent,
+                                unfocusedIndicatorColor = Color.Transparent,
+                                cursorColor = MaterialTheme.colorScheme.onPrimary,
+                                focusedTextColor = MaterialTheme.colorScheme.onPrimary
+                            ),
+                            textStyle = LocalTextStyle.current.copy(color = MaterialTheme.colorScheme.onPrimary)
+                        )
+                    } else {
+                        Text("Conversas")
+                    }
+                },
+                navigationIcon = {
+                    if (isSearchActive) {
+                        IconButton(onClick = {
+                            isSearchActive = false
+                            conversationsViewModel.onSearchQueryChanged("")
+                        }) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Fechar Busca", tint = MaterialTheme.colorScheme.onPrimary)
+                        }
+                    }
+                },
+                actions = {
+                    if (!isSearchActive) {
+                        IconButton(onClick = { isSearchActive = true }) {
+                            Icon(Icons.Default.Search, contentDescription = "Buscar", tint = MaterialTheme.colorScheme.onPrimary)
+                        }
+                        IconButton(onClick = { showMenu = !showMenu }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "Menu de opções", tint = MaterialTheme.colorScheme.onPrimary)
+                        }
+                        DropdownMenu(
+                            expanded = showMenu,
+                            onDismissRequest = { showMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Meu Perfil") },
+                                leadingIcon = { Icon(Icons.Default.AccountCircle, null) },
+                                onClick = {
+                                    showMenu = false
+                                    navController.navigate("profile")
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Sair") },
+                                onClick = {
+                                    showMenu = false
+                                    authViewModel.logout()
+                                }
+                            )
+                        }
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.primary,
                     titleContentColor = MaterialTheme.colorScheme.onPrimary
-                ),
-                actions = {
-                    IconButton(onClick = { showMenu = !showMenu }) {
-                        Icon(
-                            imageVector = Icons.Default.MoreVert,
-                            contentDescription = "Menu de opções",
-                            tint = MaterialTheme.colorScheme.onPrimary
-                        )
-                    }
-                    DropdownMenu(
-                        expanded = showMenu,
-                        onDismissRequest = { showMenu = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("Sair") },
-                            onClick = {
-                                showMenu = false
-                                authViewModel.logout()
-                            }
-                        )
-                    }
-                }
+                )
             )
         },
         floatingActionButton = {
@@ -88,14 +132,14 @@ fun HomeScreen(
                     CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
                 }
                 is ConversationUiState.Success -> {
-                    if (state.conversations.isEmpty()) {
+                    if (state.filteredConversations.isEmpty()) {
                         Text(
-                            "Nenhuma conversa encontrada.",
+                            text = if (state.searchQuery.isNotEmpty()) "Nenhum resultado encontrado." else "Nenhuma conversa encontrada.",
                             modifier = Modifier.align(Alignment.Center)
                         )
                     } else {
                         LazyColumn(modifier = Modifier.fillMaxSize()) {
-                            items(state.conversations.sortedByDescending { it.timestamp }) { conversation ->
+                            items(state.filteredConversations.sortedByDescending { it.timestamp }) { conversation ->
                                 ConversationItem(conversation = conversation) {
                                     navController.navigate("chat/${conversation.id}")
                                 }

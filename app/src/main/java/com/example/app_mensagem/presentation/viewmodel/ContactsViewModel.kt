@@ -34,7 +34,8 @@ class ContactsViewModel(application: Application) : AndroidViewModel(application
 
     init {
         val db = (application as MyApplication).database
-        repository = ChatRepository(db.conversationDao(), db.messageDao())
+        // Correção: Passando "application" como o terceiro parâmetro para o context
+        repository = ChatRepository(db.conversationDao(), db.messageDao(), application)
         loadUsers()
     }
 

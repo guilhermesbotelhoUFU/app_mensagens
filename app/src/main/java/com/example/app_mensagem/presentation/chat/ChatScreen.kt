@@ -1,7 +1,12 @@
 package com.example.app_mensagem.presentation.chat
 
+import android.content.Intent
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -22,6 +27,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -34,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
+import coil.compose.rememberAsyncImagePainter
 import com.example.app_mensagem.data.model.Message
 import com.example.app_mensagem.presentation.viewmodel.ChatViewModel
 import com.example.app_mensagem.ui.theme.App_mensagemTheme
@@ -53,6 +60,16 @@ fun ChatScreen(navController: NavController, conversationId: String?) {
     var selectedMessageId by remember { mutableStateOf<String?>(null) }
     var isSearchActive by remember { mutableStateOf(false) }
 
+    val imagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent(),
+        onResult = { uri -> chatViewModel.onMediaSelected(uri, "IMAGE") }
+    )
+
+    val videoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent(),
+        onResult = { uri -> chatViewModel.onMediaSelected(uri, "VIDEO") }
+    )
+
     LaunchedEffect(conversationId) {
         if (conversationId != null) {
             chatViewModel.loadMessages(conversationId)
@@ -60,7 +77,6 @@ fun ChatScreen(navController: NavController, conversationId: String?) {
     }
 
     LaunchedEffect(uiState.filteredMessages.size) {
-        // Rola para o final apenas se a busca não estiver ativa
         if (uiState.searchQuery.isBlank() && uiState.filteredMessages.isNotEmpty()) {
             listState.animateScrollToItem(uiState.filteredMessages.size - 1)
         }
@@ -119,25 +135,62 @@ fun ChatScreen(navController: NavController, conversationId: String?) {
             )
         },
         bottomBar = {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                OutlinedTextField(
-                    value = text,
-                    onValueChange = { text = it },
-                    modifier = Modifier.weight(1f),
-                    placeholder = { Text("Digite uma mensagem...") }
-                )
-                IconButton(onClick = {
-                    if (conversationId != null && text.isNotBlank()) {
-                        chatViewModel.sendMessage(conversationId, text)
-                        text = ""
+            Column {
+                AnimatedVisibility(visible = uiState.mediaToSendUri != null) {
+                    Box(modifier = Modifier
+                        .padding(start = 8.dp, end = 8.dp, bottom = 4.dp)
+                        .height(80.dp)
+                        .width(80.dp)
+                    ) {
+                        Image(
+                            painter = rememberAsyncImagePainter(uiState.mediaToSendUri),
+                            contentDescription = "Mídia selecionada",
+                            modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(8.dp)),
+                            contentScale = ContentScale.Crop
+                        )
+                        if (uiState.mediaType == "VIDEO") {
+                            Icon(
+                                imageVector = Icons.Default.PlayCircle,
+                                contentDescription = null,
+                                tint = Color.White.copy(alpha = 0.8f),
+                                modifier = Modifier.align(Alignment.Center).size(32.dp)
+                            )
+                        }
+                        IconButton(
+                            onClick = { chatViewModel.onMediaSelected(null, "") },
+                            modifier = Modifier.align(Alignment.TopEnd).background(Color.Black.copy(alpha = 0.5f), CircleShape).size(24.dp)
+                        ) {
+                            Icon(Icons.Default.Close, contentDescription = "Remover mídia", tint = Color.White, modifier = Modifier.size(16.dp))
+                        }
                     }
-                }) {
-                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Enviar")
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = { imagePickerLauncher.launch("image/*") }) {
+                        Icon(Icons.Default.AddPhotoAlternate, contentDescription = "Anexar Imagem")
+                    }
+                    IconButton(onClick = { videoPickerLauncher.launch("video/*") }) {
+                        Icon(Icons.Default.Videocam, contentDescription = "Anexar Vídeo")
+                    }
+                    OutlinedTextField(
+                        value = text,
+                        onValueChange = { text = it },
+                        modifier = Modifier.weight(1f),
+                        placeholder = { Text("Digite uma mensagem...") },
+                        enabled = uiState.mediaToSendUri == null
+                    )
+                    IconButton(onClick = {
+                        if (conversationId != null) {
+                            chatViewModel.sendMessage(conversationId, text)
+                            text = ""
+                        }
+                    }) {
+                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Enviar")
+                    }
                 }
             }
         }
@@ -160,7 +213,8 @@ fun ChatScreen(navController: NavController, conversationId: String?) {
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(horizontal = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    reverseLayout = false
                 ) {
                     items(uiState.filteredMessages) { message ->
                         MessageBubble(
@@ -209,7 +263,11 @@ fun PinnedMessageView(message: Message) {
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = message.text,
+                text = when (message.type) {
+                    "IMAGE" -> "📷 Imagem"
+                    "VIDEO" -> "🎥 Vídeo"
+                    else -> message.content
+                },
                 style = MaterialTheme.typography.bodyMedium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -234,6 +292,7 @@ fun MessageBubble(
     val isSentByCurrentUser = message.senderId == currentUserId
     val alignment = if (isSentByCurrentUser) Alignment.End else Alignment.Start
     val bubbleColor = if (isSentByCurrentUser) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer
+    val context = LocalContext.current
 
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -246,7 +305,13 @@ fun MessageBubble(
             modifier = Modifier
                 .widthIn(max = 300.dp)
                 .combinedClickable(
-                    onClick = { /* Pode ser usado para selecionar a msg no futuro */ },
+                    onClick = {
+                        if (message.type == "VIDEO") {
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(message.content))
+                            intent.setDataAndType(Uri.parse(message.content), "video/mp4")
+                            context.startActivity(intent)
+                        }
+                    },
                     onLongClick = onLongClick,
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null
@@ -256,10 +321,40 @@ fun MessageBubble(
                 modifier = Modifier
                     .clip(RoundedCornerShape(16.dp))
                     .background(bubbleColor)
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                    .padding(if(message.type == "IMAGE" || message.type == "VIDEO") 4.dp else 12.dp, 8.dp),
                 horizontalAlignment = if (isSentByCurrentUser) Alignment.End else Alignment.Start
             ) {
-                HighlightingText(text = message.text, query = searchQuery)
+                when(message.type) {
+                    "TEXT" -> HighlightingText(text = message.content, query = searchQuery)
+                    "IMAGE" -> {
+                        Image(
+                            painter = rememberAsyncImagePainter(model = message.content),
+                            contentDescription = "Imagem enviada",
+                            modifier = Modifier
+                                .sizeIn(maxHeight = 250.dp)
+                                .clip(RoundedCornerShape(12.dp)),
+                            contentScale = ContentScale.Fit
+                        )
+                    }
+                    "VIDEO" -> {
+                        Box(contentAlignment = Alignment.Center) {
+                            Image(
+                                painter = rememberAsyncImagePainter(model = message.thumbnailUrl),
+                                contentDescription = "Miniatura do vídeo",
+                                modifier = Modifier
+                                    .sizeIn(maxHeight = 250.dp)
+                                    .clip(RoundedCornerShape(12.dp)),
+                                contentScale = ContentScale.Fit
+                            )
+                            Icon(
+                                imageVector = Icons.Default.PlayCircle,
+                                contentDescription = "Reproduzir vídeo",
+                                tint = Color.White.copy(alpha = 0.8f),
+                                modifier = Modifier.size(48.dp)
+                            )
+                        }
+                    }
+                }
                 Spacer(modifier = Modifier.height(4.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
@@ -366,7 +461,7 @@ private fun formatTimestamp(timestamp: Long): String {
 
 @Composable
 fun HighlightingText(text: String, query: String) {
-    if (query.isBlank()) {
+    if (query.isBlank() || text.isBlank()) {
         Text(text = text, textAlign = TextAlign.Start)
         return
     }

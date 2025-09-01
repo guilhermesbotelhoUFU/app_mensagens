@@ -11,9 +11,11 @@ data class Message(
     @PrimaryKey val id: String = "",
     val conversationId: String = "",
     val senderId: String = "",
-    val text: String = "",
+    val content: String = "",
+    val type: String = "TEXT", // "TEXT", "IMAGE", "VIDEO"
+    val thumbnailUrl: String? = null,
     val timestamp: Long = 0L,
-    var status: String = "SENT", // Status: SENDING, SENT, FAILED
+    var status: String = "SENT",
     val deliveredTimestamp: Long = 0L,
     val readTimestamp: Long = 0L,
     val reactions: Map<String, String> = emptyMap()
