@@ -3,28 +3,31 @@ package com.example.app_mensagem.data
 import android.content.Context
 import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
-import android.media.ThumbnailUtils
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
+import android.util.Log
 import android.util.Size
 import com.example.app_mensagem.data.local.ConversationDao
 import com.example.app_mensagem.data.local.MessageDao
 import com.example.app_mensagem.data.model.Conversation
+import com.example.app_mensagem.data.model.Group
 import com.example.app_mensagem.data.model.Message
 import com.example.app_mensagem.data.model.User
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
+import com.google.firebase.database.DatabaseReference
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ValueEventListener
 import com.google.firebase.database.getValue
 import com.google.firebase.storage.FirebaseStorage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
@@ -43,26 +46,115 @@ class ChatRepository(
     private val database: FirebaseDatabase = FirebaseDatabase.getInstance()
     private val storage = FirebaseStorage.getInstance()
 
-    fun getConversations(): Flow<List<Conversation>> {
-        val userId = auth.currentUser?.uid ?: return flowOf(emptyList())
+    private var conversationsListener: ValueEventListener? = null
+    private var conversationsRef: DatabaseReference? = null
 
-        val conversationsRef = database.getReference("user-conversations").child(userId)
-        conversationsRef.addValueEventListener(object : ValueEventListener {
+    fun startConversationListener() {
+        val userId = auth.currentUser?.uid ?: return
+        if (conversationsListener != null) return
+
+        conversationsRef = database.getReference("user-conversations").child(userId)
+        conversationsListener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
                 val conversations = snapshot.children.mapNotNull { it.getValue(Conversation::class.java) }
                 CoroutineScope(Dispatchers.IO).launch {
                     conversations.forEach { conversationDao.insertOrUpdate(it) }
                 }
             }
-            override fun onCancelled(error: DatabaseError) { }
-        })
+            override fun onCancelled(error: DatabaseError) {
+                Log.e("ChatRepository", "Ouvinte de conversas cancelado: ${error.message}")
+            }
+        }
+        conversationsRef?.addValueEventListener(conversationsListener!!)
+    }
 
+    fun stopConversationListener() {
+        conversationsListener?.let { conversationsRef?.removeEventListener(it) }
+        conversationsListener = null
+    }
+
+    fun getConversations(): Flow<List<Conversation>> {
         return conversationDao.getAllConversations()
     }
 
-    fun getMessagesForConversation(conversationId: String): Flow<List<Message>> {
+    suspend fun syncUserConversations() {
+        val userId = auth.currentUser?.uid ?: return
+        try {
+            val conversationsRef = database.getReference("user-conversations").child(userId)
+            val snapshot = conversationsRef.get().await()
+            val conversations = snapshot.children.mapNotNull { it.getValue(Conversation::class.java) }
+            conversations.forEach { conversationDao.insertOrUpdate(it) }
+        } catch (e: Exception) {
+            Log.e("ChatRepository", "Falha na sincronização inicial: ${e.message}")
+        }
+    }
+
+    suspend fun clearLocalCache() {
+        conversationDao.clearAll()
+        messageDao.clearAll()
+    }
+
+    suspend fun getUsers(): List<User> {
         val currentUserId = auth.currentUser?.uid
-        val messagesRef = database.getReference("messages").child(conversationId)
+        val usersRef = database.getReference("users")
+
+        val snapshot = usersRef.get().await()
+        return snapshot.children.mapNotNull {
+            it.getValue(User::class.java)
+        }.filter { it.uid != currentUserId }
+    }
+
+    suspend fun createGroup(name: String, memberIds: List<String>) {
+        val currentUserId = auth.currentUser?.uid ?: return
+        val currentUser = database.getReference("users").child(currentUserId).get().await().getValue(User::class.java)
+
+        val groupsRef = database.getReference("groups")
+        val groupId = groupsRef.push().key ?: return
+
+        val allMemberIds = (memberIds + currentUserId).distinct()
+        val membersMap = allMemberIds.associateWith { true }
+
+        val group = Group(
+            id = groupId,
+            name = name,
+            creatorId = currentUserId,
+            members = membersMap
+        )
+
+        groupsRef.child(groupId).setValue(group).await()
+
+        val groupConversation = Conversation(
+            id = groupId,
+            name = name,
+            lastMessage = "Grupo criado por ${currentUser?.name ?: "alguém"}!",
+            timestamp = System.currentTimeMillis(),
+            isGroup = true
+        )
+
+        allMemberIds.forEach { memberId ->
+            database.getReference("user-conversations")
+                .child(memberId)
+                .child(groupId)
+                .setValue(groupConversation)
+                .await()
+        }
+    }
+
+    suspend fun getGroupMembers(groupId: String): List<User> = coroutineScope {
+        val groupSnapshot = database.getReference("groups").child(groupId).child("members").get().await()
+        val memberIds = groupSnapshot.children.mapNotNull { it.key }
+
+        memberIds.map { userId ->
+            async(Dispatchers.IO) {
+                database.getReference("users").child(userId).get().await().getValue(User::class.java)
+            }
+        }.awaitAll().filterNotNull()
+    }
+
+    fun getMessagesForConversation(conversationId: String, isGroup: Boolean): Flow<List<Message>> {
+        val currentUserId = auth.currentUser?.uid
+        val path = if (isGroup) "group-messages" else "messages"
+        val messagesRef = database.getReference(path).child(conversationId)
 
         messagesRef.addValueEventListener(object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
@@ -74,7 +166,7 @@ class ChatRepository(
                 CoroutineScope(Dispatchers.IO).launch {
                     messages.forEach { message ->
                         messageDao.insertOrUpdate(message)
-                        if (message.senderId != currentUserId && message.deliveredTimestamp == 0L) {
+                        if (!isGroup && message.senderId != currentUserId && message.deliveredTimestamp == 0L) {
                             confirmDelivery(conversationId, message.id)
                         }
                     }
@@ -91,114 +183,92 @@ class ChatRepository(
             .child("deliveredTimestamp").setValue(System.currentTimeMillis())
     }
 
-    fun markMessagesAsRead(conversationId: String, messages: List<Message>) {
+    fun markMessagesAsRead(conversationId: String, messages: List<Message>, isGroup: Boolean) {
+        if (isGroup) return
         val currentUserId = auth.currentUser?.uid
+        val path = "messages"
         messages.forEach { message ->
             if (message.senderId != currentUserId && message.readTimestamp == 0L) {
-                database.getReference("messages/$conversationId/${message.id}")
+                database.getReference("$path/$conversationId/${message.id}")
                     .child("readTimestamp").setValue(System.currentTimeMillis())
             }
         }
     }
 
-    suspend fun sendMessage(conversationId: String, text: String) {
+    private suspend fun updateLastMessageForConversation(conversationId: String, lastMessage: String, timestamp: Long, isGroup: Boolean) {
+        val membersToUpdate = if (isGroup) {
+            database.getReference("groups").child(conversationId).child("members").get().await().children.mapNotNull { it.key }
+        } else {
+            conversationId.split("-")
+        }
+
+        if (membersToUpdate.isEmpty()) return
+
+        membersToUpdate.forEach { memberId ->
+            val conversationRef = database.getReference("user-conversations/$memberId/$conversationId")
+            val currentConversation = conversationRef.get().await().getValue(Conversation::class.java)
+            if (currentConversation != null) {
+                val updatedConversation = currentConversation.copy(
+                    lastMessage = lastMessage,
+                    timestamp = timestamp
+                )
+                conversationRef.setValue(updatedConversation).await()
+            }
+        }
+    }
+
+    suspend fun sendMessage(conversationId: String, content: String, isGroup: Boolean) {
         val currentUserId = auth.currentUser?.uid ?: return
-        val messagesRef = database.getReference("messages").child(conversationId)
+        val path = if (isGroup) "group-messages" else "messages"
+        val messagesRef = database.getReference(path).child(conversationId)
         val messageId = messagesRef.push().key ?: return
 
         val message = Message(
             id = messageId,
             conversationId = conversationId,
             senderId = currentUserId,
-            content = text,
+            content = content,
             type = "TEXT",
             timestamp = System.currentTimeMillis(),
             status = "SENDING"
         )
-
         messageDao.insertOrUpdate(message)
 
-        try {
-            messagesRef.child(messageId).setValue(message).await()
-            messageDao.insertOrUpdate(message.copy(status = "SENT"))
+        val messageForFirebase = message.copy(status = "SENT")
 
-            val lastMessageUpdate = mapOf("lastMessage" to text, "timestamp" to message.timestamp)
-            val userIds = conversationId.split("-")
-            if (userIds.size == 2) {
-                database.getReference("user-conversations/${userIds[0]}/$conversationId").updateChildren(lastMessageUpdate)
-                database.getReference("user-conversations/${userIds[1]}/$conversationId").updateChildren(lastMessageUpdate)
-            }
+        try {
+            messagesRef.child(messageId).setValue(messageForFirebase).await()
+            messageDao.insertOrUpdate(message.copy(status = "SENT"))
+            updateLastMessageForConversation(conversationId, content, message.timestamp, isGroup)
         } catch (e: Exception) {
             messageDao.insertOrUpdate(message.copy(status = "FAILED"))
         }
     }
 
-    suspend fun sendImageMessage(conversationId: String, imageUri: Uri) {
+    suspend fun sendMediaMessage(conversationId: String, uri: Uri, type: String, isGroup: Boolean) {
         val currentUserId = auth.currentUser?.uid ?: return
-        val messagesRef = database.getReference("messages").child(conversationId)
+        val path = if (isGroup) "group-messages" else "messages"
+        val messagesRef = database.getReference(path).child(conversationId)
         val messageId = messagesRef.push().key ?: return
 
-        val imageFileName = "${UUID.randomUUID()}.jpg"
-        val storageRef = storage.getReference("images/$conversationId/$imageFileName")
-        storageRef.putFile(imageUri).await()
+        val fileExtension = if (type == "IMAGE") "jpg" else "mp4"
+        val storagePath = if (type == "IMAGE") "images" else "videos"
+        val fileName = "${UUID.randomUUID()}.$fileExtension"
+        val storageRef = storage.getReference("$storagePath/$conversationId/$fileName")
+        storageRef.putFile(uri).await()
         val downloadUrl = storageRef.downloadUrl.await().toString()
+
+        var thumbnailUrl: String? = null
+        if (type == "VIDEO") {
+            thumbnailUrl = generateAndUploadThumbnail(conversationId, uri)
+        }
 
         val message = Message(
             id = messageId,
             conversationId = conversationId,
             senderId = currentUserId,
             content = downloadUrl,
-            type = "IMAGE",
-            timestamp = System.currentTimeMillis(),
-            status = "SENT"
-        )
-
-        messagesRef.child(messageId).setValue(message).await()
-        messageDao.insertOrUpdate(message)
-
-        val lastMessageUpdate = mapOf("lastMessage" to "📷 Imagem", "timestamp" to message.timestamp)
-        val userIds = conversationId.split("-")
-        if (userIds.size == 2) {
-            database.getReference("user-conversations/${userIds[0]}/$conversationId").updateChildren(lastMessageUpdate)
-            database.getReference("user-conversations/${userIds[1]}/$conversationId").updateChildren(lastMessageUpdate)
-        }
-    }
-
-    suspend fun sendVideoMessage(conversationId: String, videoUri: Uri) {
-        val currentUserId = auth.currentUser?.uid ?: return
-        val messagesRef = database.getReference("messages").child(conversationId)
-        val messageId = messagesRef.push().key ?: return
-
-        // Bloco corrigido para gerar a thumbnail
-        val thumbnailBitmap: Bitmap? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            context.contentResolver.loadThumbnail(videoUri, Size(240, 240), null)
-        } else {
-            val retriever = MediaMetadataRetriever()
-            retriever.setDataSource(context, videoUri)
-            val bitmap = retriever.getFrameAtTime(1000000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-            retriever.release()
-            bitmap
-        }
-
-        val baos = ByteArrayOutputStream()
-        thumbnailBitmap?.compress(Bitmap.CompressFormat.JPEG, 70, baos)
-        val thumbnailData = baos.toByteArray()
-        val thumbnailFileName = "${UUID.randomUUID()}.jpg"
-        val thumbnailStorageRef = storage.getReference("thumbnails/$conversationId/$thumbnailFileName")
-        thumbnailStorageRef.putBytes(thumbnailData).await()
-        val thumbnailUrl = thumbnailStorageRef.downloadUrl.await().toString()
-
-        val videoFileName = "${UUID.randomUUID()}.mp4"
-        val videoStorageRef = storage.getReference("videos/$conversationId/$videoFileName")
-        videoStorageRef.putFile(videoUri).await()
-        val videoUrl = videoStorageRef.downloadUrl.await().toString()
-
-        val message = Message(
-            id = messageId,
-            conversationId = conversationId,
-            senderId = currentUserId,
-            content = videoUrl,
-            type = "VIDEO",
+            type = type,
             thumbnailUrl = thumbnailUrl,
             timestamp = System.currentTimeMillis(),
             status = "SENT"
@@ -207,12 +277,35 @@ class ChatRepository(
         messagesRef.child(messageId).setValue(message).await()
         messageDao.insertOrUpdate(message)
 
-        val lastMessageUpdate = mapOf("lastMessage" to "🎥 Vídeo", "timestamp" to message.timestamp)
-        val userIds = conversationId.split("-")
-        if (userIds.size == 2) {
-            database.getReference("user-conversations/${userIds[0]}/$conversationId").updateChildren(lastMessageUpdate)
-            database.getReference("user-conversations/${userIds[1]}/$conversationId").updateChildren(lastMessageUpdate)
+        val lastMessageText = if (type == "IMAGE") "📷 Imagem" else "🎥 Vídeo"
+        updateLastMessageForConversation(conversationId, lastMessageText, message.timestamp, isGroup)
+    }
+
+    private suspend fun generateAndUploadThumbnail(conversationId: String, videoUri: Uri): String? {
+        val thumbnailBitmap: Bitmap? = try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                context.contentResolver.loadThumbnail(videoUri, Size(240, 240), null)
+            } else {
+                @Suppress("DEPRECATION")
+                val retriever = MediaMetadataRetriever()
+                retriever.setDataSource(context, videoUri)
+                val bitmap = retriever.getFrameAtTime(1000000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                retriever.release()
+                bitmap
+            }
+        } catch (e: Exception) {
+            null
         }
+
+        if (thumbnailBitmap == null) return null
+
+        val baos = ByteArrayOutputStream()
+        thumbnailBitmap.compress(Bitmap.CompressFormat.JPEG, 70, baos)
+        val thumbnailData = baos.toByteArray()
+        val thumbnailFileName = "${UUID.randomUUID()}.jpg"
+        val thumbnailStorageRef = storage.getReference("thumbnails/$conversationId/$thumbnailFileName")
+        thumbnailStorageRef.putBytes(thumbnailData).await()
+        return thumbnailStorageRef.downloadUrl.await().toString()
     }
 
     suspend fun createOrGetConversation(targetUser: User): String {
@@ -225,10 +318,25 @@ class ChatRepository(
         }
 
         val currentUserSnapshot = database.getReference("users").child(currentUserId).get().await()
-        val currentUserName = currentUserSnapshot.child("name").getValue(String::class.java) ?: "Usuário"
+        val currentUser = currentUserSnapshot.getValue(User::class.java)
 
-        val conversationForCurrentUser = Conversation(id = conversationId, name = targetUser.name, lastMessage = "Inicie a conversa!", timestamp = System.currentTimeMillis())
-        val conversationForTargetUser = Conversation(id = conversationId, name = currentUserName, lastMessage = "Inicie a conversa!", timestamp = System.currentTimeMillis())
+        val conversationForCurrentUser = Conversation(
+            id = conversationId,
+            name = targetUser.name,
+            profilePictureUrl = targetUser.profilePictureUrl,
+            lastMessage = "Inicie a conversa!",
+            timestamp = System.currentTimeMillis(),
+            isGroup = false
+        )
+
+        val conversationForTargetUser = Conversation(
+            id = conversationId,
+            name = currentUser?.name ?: "Usuário",
+            profilePictureUrl = currentUser?.profilePictureUrl,
+            lastMessage = "Inicie a conversa!",
+            timestamp = System.currentTimeMillis(),
+            isGroup = false
+        )
 
         database.getReference("user-conversations/$currentUserId/$conversationId").setValue(conversationForCurrentUser).await()
         database.getReference("user-conversations/${targetUser.uid}/$conversationId").setValue(conversationForTargetUser).await()
@@ -242,67 +350,40 @@ class ChatRepository(
         return if (userId1 > userId2) "$userId1-$userId2" else "$userId2-$userId1"
     }
 
-    fun getUsers(): Flow<List<User>> = callbackFlow {
-        val currentUserId = auth.currentUser?.uid
-        val usersRef = database.getReference("users")
-
-        val listener = object : ValueEventListener {
-            override fun onDataChange(snapshot: DataSnapshot) {
-                val users = snapshot.children.mapNotNull {
-                    it.getValue(User::class.java)
-                }.filter { it.uid != currentUserId }
-                trySend(users)
-            }
-            override fun onCancelled(error: DatabaseError) { close(error.toException()) }
-        }
-        usersRef.addValueEventListener(listener)
-        awaitClose { usersRef.removeEventListener(listener) }
+    suspend fun getConversationDetails(conversationId: String): Conversation? {
+        return conversationDao.getConversationById(conversationId)
     }
 
-    suspend fun getConversationDetails(conversationId: String): Conversation? = suspendCoroutine { continuation ->
-        val currentUserId = auth.currentUser?.uid
-        if (currentUserId == null) {
-            continuation.resume(null)
-            return@suspendCoroutine
-        }
-
-        database.getReference("user-conversations").child(currentUserId).child(conversationId)
-            .get()
-            .addOnSuccessListener { snapshot ->
-                val conversation = snapshot.getValue(Conversation::class.java)
-                continuation.resume(conversation)
-            }
-            .addOnFailureListener {
-                continuation.resume(null)
-            }
-    }
-
-    suspend fun getMessageById(conversationId: String, messageId: String): Message? {
-        val snapshot = database.getReference("messages/$conversationId/$messageId").get().await()
+    suspend fun getMessageById(conversationId: String, messageId: String, isGroup: Boolean): Message? {
+        val path = if (isGroup) "group-messages" else "messages"
+        val snapshot = database.getReference("$path/$conversationId/$messageId").get().await()
         return snapshot.getValue(Message::class.java)
     }
 
-    suspend fun togglePinMessage(conversationId: String, message: Message) {
-        val currentUserId = auth.currentUser?.uid ?: return
-        val otherUserId = conversationId.replace(currentUserId, "").replace("-", "")
+    suspend fun togglePinMessage(conversationId: String, message: Message, isGroup: Boolean) {
+        val conversation = conversationDao.getConversationById(conversationId)
+        val newPinnedId = if (conversation?.pinnedMessageId == message.id) null else message.id
+        val pinUpdate = mapOf("pinnedMessageId" to newPinnedId)
 
-        val conversationRefCurrentUser = database.getReference("user-conversations/$currentUserId/$conversationId")
-
-        val currentConversation = conversationRefCurrentUser.get().await().getValue(Conversation::class.java)
-
-        val newPinnedId = if (currentConversation?.pinnedMessageId == message.id) {
-            null
+        if (isGroup) {
+            val groupSnapshot = database.getReference("groups").child(conversationId).child("members").get().await()
+            val memberIds = groupSnapshot.children.mapNotNull { it.key }
+            memberIds.forEach { memberId ->
+                database.getReference("user-conversations/$memberId/$conversationId").updateChildren(pinUpdate)
+            }
         } else {
-            message.id
+            val userIds = conversationId.split("-")
+            if (userIds.size == 2) {
+                database.getReference("user-conversations/${userIds[0]}/$conversationId").updateChildren(pinUpdate)
+                database.getReference("user-conversations/${userIds[1]}/$conversationId").updateChildren(pinUpdate)
+            }
         }
-
-        conversationRefCurrentUser.child("pinnedMessageId").setValue(newPinnedId).await()
-        database.getReference("user-conversations/$otherUserId/$conversationId").child("pinnedMessageId").setValue(newPinnedId).await()
     }
 
-    suspend fun toggleReaction(conversationId: String, messageId: String, emoji: String) {
+    suspend fun toggleReaction(conversationId: String, messageId: String, emoji: String, isGroup: Boolean) {
         val currentUserId = auth.currentUser?.uid ?: return
-        val messageRef = database.getReference("messages/$conversationId/$messageId")
+        val path = if (isGroup) "group-messages" else "messages"
+        val messageRef = database.getReference("$path/$conversationId/$messageId")
 
         val snapshot = messageRef.child("reactions").get().await()
         val reactions = snapshot.getValue<MutableMap<String, String>>() ?: mutableMapOf()
@@ -314,5 +395,9 @@ class ChatRepository(
         }
 
         messageRef.child("reactions").setValue(reactions).await()
+    }
+    suspend fun getGroupDetails(groupId: String): Group? {
+        val snapshot = database.getReference("groups").child(groupId).get().await()
+        return snapshot.getValue(Group::class.java)
     }
 }

@@ -4,6 +4,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AccountCircle
@@ -14,15 +15,21 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
+import coil.compose.AsyncImage
+import com.example.app_mensagem.R
 import com.example.app_mensagem.data.model.Conversation
+import com.example.app_mensagem.presentation.common.LifecycleObserver
 import com.example.app_mensagem.presentation.viewmodel.AuthViewModel
 import com.example.app_mensagem.presentation.viewmodel.ConversationUiState
 import com.example.app_mensagem.presentation.viewmodel.ConversationsViewModel
@@ -41,6 +48,14 @@ fun HomeScreen(
     var showMenu by remember { mutableStateOf(false) }
     var isSearchActive by remember { mutableStateOf(false) }
     val conversationState by conversationsViewModel.uiState.collectAsState()
+
+    // **** LÓGICA DE CICLO DE VIDA ADICIONADA ****
+    LifecycleObserver { event ->
+        if (event == Lifecycle.Event.ON_RESUME) {
+            // Toda vez que a tela se torna ativa, força uma sincronização
+            conversationsViewModel.resyncConversations()
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -132,14 +147,14 @@ fun HomeScreen(
                     CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
                 }
                 is ConversationUiState.Success -> {
-                    if (state.filteredConversations.isEmpty()) {
+                    if (state.conversations.isEmpty()) {
                         Text(
                             text = if (state.searchQuery.isNotEmpty()) "Nenhum resultado encontrado." else "Nenhuma conversa encontrada.",
                             modifier = Modifier.align(Alignment.Center)
                         )
                     } else {
                         LazyColumn(modifier = Modifier.fillMaxSize()) {
-                            items(state.filteredConversations.sortedByDescending { it.timestamp }) { conversation ->
+                            items(state.conversations.sortedByDescending { it.timestamp }) { conversation ->
                                 ConversationItem(conversation = conversation) {
                                     navController.navigate("chat/${conversation.id}")
                                 }
@@ -167,6 +182,17 @@ fun ConversationItem(conversation: Conversation, onClick: () -> Unit) {
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        AsyncImage(
+            model = conversation.profilePictureUrl ?: R.drawable.ic_launcher_foreground,
+            contentDescription = "Foto de Perfil de ${conversation.name}",
+            modifier = Modifier
+                .size(48.dp)
+                .clip(CircleShape),
+            contentScale = ContentScale.Crop
+        )
+
+        Spacer(modifier = Modifier.width(16.dp))
+
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = conversation.name,

@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.DrawableRes
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
@@ -13,6 +14,9 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -29,6 +33,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -40,8 +45,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
+import coil.compose.AsyncImage
 import coil.compose.rememberAsyncImagePainter
+import com.example.app_mensagem.R
 import com.example.app_mensagem.data.model.Message
+import com.example.app_mensagem.data.model.User
 import com.example.app_mensagem.presentation.viewmodel.ChatViewModel
 import com.example.app_mensagem.ui.theme.App_mensagemTheme
 import com.google.firebase.auth.FirebaseAuth
@@ -49,6 +57,9 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.regex.Pattern
+import android.util.Log
+
+// A lista de stickers foi removida pois a funcionalidade foi substituída pelo envio de mídia.
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -76,14 +87,15 @@ fun ChatScreen(navController: NavController, conversationId: String?) {
         }
     }
 
-    LaunchedEffect(uiState.filteredMessages.size) {
-        if (uiState.searchQuery.isBlank() && uiState.filteredMessages.isNotEmpty()) {
-            listState.animateScrollToItem(uiState.filteredMessages.size - 1)
+    LaunchedEffect(uiState.chatItems.size) {
+        if (uiState.searchQuery.isBlank() && uiState.chatItems.isNotEmpty()) {
+            listState.animateScrollToItem(uiState.chatItems.size - 1)
         }
     }
 
     Scaffold(
         topBar = {
+            val isGroup = uiState.conversation?.isGroup ?: false
             TopAppBar(
                 title = {
                     if (isSearchActive) {
@@ -104,7 +116,25 @@ fun ChatScreen(navController: NavController, conversationId: String?) {
                             textStyle = LocalTextStyle.current.copy(color = MaterialTheme.colorScheme.onPrimary)
                         )
                     } else {
-                        Text(uiState.conversationTitle)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.clickable(enabled = isGroup) {
+                                if (conversationId != null) {
+                                    navController.navigate("group_info/$conversationId")
+                                }
+                            }
+                        ) {
+                            AsyncImage(
+                                model = uiState.conversation?.profilePictureUrl ?: R.drawable.ic_launcher_foreground,
+                                contentDescription = "Foto de Perfil de ${uiState.conversationTitle}",
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(CircleShape),
+                                contentScale = ContentScale.Crop
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(uiState.conversationTitle)
+                        }
                     }
                 },
                 navigationIcon = {
@@ -212,31 +242,46 @@ fun ChatScreen(navController: NavController, conversationId: String?) {
                     state = listState,
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(horizontal = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                    reverseLayout = false
+                        .padding(horizontal = 8.dp)
                 ) {
-                    items(uiState.filteredMessages) { message ->
-                        MessageBubble(
-                            message = message,
-                            searchQuery = uiState.searchQuery,
-                            isSelected = selectedMessageId == message.id,
-                            onLongClick = {
-                                selectedMessageId = if (selectedMessageId == message.id) null else message.id
-                            },
-                            onReaction = { emoji ->
-                                if (conversationId != null) {
-                                    chatViewModel.onReactionClick(conversationId, message.id, emoji)
-                                }
-                                selectedMessageId = null
-                            },
-                            onPin = {
-                                if (conversationId != null) {
-                                    chatViewModel.onPinMessageClick(conversationId, message)
-                                }
-                                selectedMessageId = null
+                    items(
+                        items = uiState.chatItems,
+                        key = { item ->
+                            when (item) {
+                                is ChatItem.DateHeader -> item.date
+                                is ChatItem.MessageItem -> item.message.id
                             }
-                        )
+                        }
+                    ) { item ->
+                        when (item) {
+                            is ChatItem.DateHeader -> {
+                                DateHeader(date = item.date)
+                            }
+                            is ChatItem.MessageItem -> {
+                                MessageBubble(
+                                    message = item.message,
+                                    searchQuery = uiState.searchQuery,
+                                    isSelected = selectedMessageId == item.message.id,
+                                    isGroup = uiState.conversation?.isGroup ?: false,
+                                    groupMembers = uiState.groupMembers,
+                                    onLongClick = {
+                                        selectedMessageId = if (selectedMessageId == item.message.id) null else item.message.id
+                                    },
+                                    onReaction = { emoji ->
+                                        if (conversationId != null) {
+                                            chatViewModel.onReactionClick(conversationId, item.message.id, emoji)
+                                        }
+                                        selectedMessageId = null
+                                    },
+                                    onPin = {
+                                        if (conversationId != null) {
+                                            chatViewModel.onPinMessageClick(conversationId, item.message)
+                                        }
+                                        selectedMessageId = null
+                                    }
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -277,6 +322,27 @@ fun PinnedMessageView(message: Message) {
     }
 }
 
+@Composable
+fun DateHeader(date: String) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.secondaryContainer,
+            tonalElevation = 1.dp
+        ) {
+            Text(
+                text = date,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+            )
+        }
+    }
+}
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
@@ -284,6 +350,8 @@ fun MessageBubble(
     message: Message,
     searchQuery: String,
     isSelected: Boolean,
+    isGroup: Boolean,
+    groupMembers: Map<String, User>,
     onLongClick: () -> Unit,
     onReaction: (String) -> Unit,
     onPin: () -> Unit
@@ -291,85 +359,41 @@ fun MessageBubble(
     val currentUserId = FirebaseAuth.getInstance().currentUser?.uid
     val isSentByCurrentUser = message.senderId == currentUserId
     val alignment = if (isSentByCurrentUser) Alignment.End else Alignment.Start
-    val bubbleColor = if (isSentByCurrentUser) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer
-    val context = LocalContext.current
 
     Column(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
         horizontalAlignment = alignment
     ) {
+        if (isGroup && !isSentByCurrentUser) {
+            val sender = groupMembers[message.senderId]
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(start = 8.dp, bottom = 4.dp)
+            ) {
+                AsyncImage(
+                    model = sender?.profilePictureUrl ?: R.drawable.ic_launcher_foreground,
+                    contentDescription = "Avatar de ${sender?.name}",
+                    modifier = Modifier
+                        .size(24.dp)
+                        .clip(CircleShape),
+                    contentScale = ContentScale.Crop
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = sender?.name ?: "Usuário",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+
         AnimatedVisibility(visible = isSelected) {
             EmojiPicker(onReaction = onReaction, onPin = onPin)
         }
-        Box(
-            modifier = Modifier
-                .widthIn(max = 300.dp)
-                .combinedClickable(
-                    onClick = {
-                        if (message.type == "VIDEO") {
-                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(message.content))
-                            intent.setDataAndType(Uri.parse(message.content), "video/mp4")
-                            context.startActivity(intent)
-                        }
-                    },
-                    onLongClick = onLongClick,
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null
-                )
-        ) {
-            Column(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(bubbleColor)
-                    .padding(if(message.type == "IMAGE" || message.type == "VIDEO") 4.dp else 12.dp, 8.dp),
-                horizontalAlignment = if (isSentByCurrentUser) Alignment.End else Alignment.Start
-            ) {
-                when(message.type) {
-                    "TEXT" -> HighlightingText(text = message.content, query = searchQuery)
-                    "IMAGE" -> {
-                        Image(
-                            painter = rememberAsyncImagePainter(model = message.content),
-                            contentDescription = "Imagem enviada",
-                            modifier = Modifier
-                                .sizeIn(maxHeight = 250.dp)
-                                .clip(RoundedCornerShape(12.dp)),
-                            contentScale = ContentScale.Fit
-                        )
-                    }
-                    "VIDEO" -> {
-                        Box(contentAlignment = Alignment.Center) {
-                            Image(
-                                painter = rememberAsyncImagePainter(model = message.thumbnailUrl),
-                                contentDescription = "Miniatura do vídeo",
-                                modifier = Modifier
-                                    .sizeIn(maxHeight = 250.dp)
-                                    .clip(RoundedCornerShape(12.dp)),
-                                contentScale = ContentScale.Fit
-                            )
-                            Icon(
-                                imageVector = Icons.Default.PlayCircle,
-                                contentDescription = "Reproduzir vídeo",
-                                tint = Color.White.copy(alpha = 0.8f),
-                                modifier = Modifier.size(48.dp)
-                            )
-                        }
-                    }
-                }
-                Spacer(modifier = Modifier.height(4.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = formatTimestamp(message.timestamp),
-                        style = MaterialTheme.typography.bodySmall,
-                        fontSize = 10.sp,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                    )
-                    if (isSentByCurrentUser) {
-                        Spacer(modifier = Modifier.width(4.dp))
-                        MessageStatusIcon(message = message)
-                    }
-                }
-            }
-        }
+
+        BubbleContent(message = message, searchQuery = searchQuery, onLongClick = onLongClick)
+
         if (message.reactions.isNotEmpty()) {
             FlowRow(
                 modifier = Modifier.padding(top = 2.dp)
@@ -382,6 +406,89 @@ fun MessageBubble(
         }
     }
 }
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun BubbleContent(
+    message: Message,
+    searchQuery: String,
+    onLongClick: () -> Unit
+) {
+    val isSentByCurrentUser = message.senderId == FirebaseAuth.getInstance().currentUser?.uid
+    val bubbleColor = if (isSentByCurrentUser) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer
+    val context = LocalContext.current
+
+    Box(
+        modifier = Modifier
+            .widthIn(max = 300.dp)
+            .combinedClickable(
+                onClick = {
+                    if (message.type == "VIDEO") {
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(message.content))
+                        intent.setDataAndType(Uri.parse(message.content), "video/mp4")
+                        context.startActivity(intent)
+                    }
+                },
+                onLongClick = onLongClick,
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null
+            )
+    ) {
+        Column(
+            modifier = Modifier
+                .clip(RoundedCornerShape(16.dp))
+                .background(bubbleColor)
+                .padding(if (message.type == "IMAGE" || message.type == "VIDEO") 4.dp else 12.dp, 8.dp),
+            horizontalAlignment = if (isSentByCurrentUser) Alignment.End else Alignment.Start
+        ) {
+            when (message.type) {
+                "TEXT" -> HighlightingText(text = message.content, query = searchQuery)
+                "IMAGE" -> {
+                    Image(
+                        painter = rememberAsyncImagePainter(model = message.content),
+                        contentDescription = "Imagem enviada",
+                        modifier = Modifier
+                            .sizeIn(maxHeight = 250.dp)
+                            .clip(RoundedCornerShape(12.dp)),
+                        contentScale = ContentScale.Fit
+                    )
+                }
+                "VIDEO" -> {
+                    Box(contentAlignment = Alignment.Center) {
+                        Image(
+                            painter = rememberAsyncImagePainter(model = message.thumbnailUrl),
+                            contentDescription = "Miniatura do vídeo",
+                            modifier = Modifier
+                                .sizeIn(maxHeight = 250.dp)
+                                .clip(RoundedCornerShape(12.dp)),
+                            contentScale = ContentScale.Fit
+                        )
+                        Icon(
+                            imageVector = Icons.Default.PlayCircle,
+                            contentDescription = "Reproduzir vídeo",
+                            tint = Color.White.copy(alpha = 0.8f),
+                            modifier = Modifier.size(48.dp)
+                        )
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = formatTimestamp(message.timestamp),
+                    style = MaterialTheme.typography.bodySmall,
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                )
+                if (isSentByCurrentUser) {
+                    Spacer(modifier = Modifier.width(4.dp))
+                    MessageStatusIcon(message = message)
+                }
+            }
+        }
+    }
+}
+
 
 @Composable
 fun EmojiPicker(onReaction: (String) -> Unit, onPin: () -> Unit) {

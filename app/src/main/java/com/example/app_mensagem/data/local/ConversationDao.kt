@@ -18,4 +18,7 @@ interface ConversationDao {
 
     @Query("SELECT * FROM conversations WHERE id = :conversationId")
     suspend fun getConversationById(conversationId: String): Conversation?
+
+    @Query("DELETE FROM conversations")
+    suspend fun clearAll()
 }
