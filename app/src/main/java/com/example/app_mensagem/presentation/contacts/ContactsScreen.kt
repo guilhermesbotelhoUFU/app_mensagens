@@ -1,27 +1,35 @@
 package com.example.app_mensagem.presentation.contacts
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import androidx.navigation.compose.rememberNavController
+import coil.compose.AsyncImage
+import com.example.app_mensagem.R
 import com.example.app_mensagem.data.model.User
 import com.example.app_mensagem.presentation.viewmodel.ContactNavigationState
 import com.example.app_mensagem.presentation.viewmodel.ContactsUiState
 import com.example.app_mensagem.presentation.viewmodel.ContactsViewModel
 import com.example.app_mensagem.ui.theme.App_mensagemTheme
-import com.google.firebase.auth.FirebaseAuth
+import com.google.gson.Gson
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -31,17 +39,14 @@ fun ContactsScreen(
 ) {
     val contactsState by contactsViewModel.uiState.collectAsState()
     val navigationState by contactsViewModel.navigationState.collectAsState()
-
-    LaunchedEffect(FirebaseAuth.getInstance().currentUser) {
-        if (FirebaseAuth.getInstance().currentUser != null) {
-            contactsViewModel.loadUsers()
-        }
-    }
+    val selectedUsers = remember { mutableStateListOf<User>() }
 
     LaunchedEffect(navigationState) {
         if (navigationState is ContactNavigationState.NavigateToChat) {
             val conversationId = (navigationState as ContactNavigationState.NavigateToChat).conversationId
-            navController.navigate("chat/$conversationId")
+            navController.navigate("chat/$conversationId") {
+                popUpTo("home")
+            }
             contactsViewModel.onNavigated()
         }
     }
@@ -49,13 +54,30 @@ fun ContactsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Iniciar Conversa") },
+                title = { Text(if (selectedUsers.isEmpty()) "Contatos" else "${selectedUsers.size} selecionados") },
                 navigationIcon = {
                     IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Voltar")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Voltar")
                     }
                 }
             )
+        },
+        floatingActionButton = {
+            if (selectedUsers.isNotEmpty()) {
+                FloatingActionButton(onClick = {
+                    // **** LÓGICA INTELIGENTE ADICIONADA AQUI ****
+                    if (selectedUsers.size == 1) {
+                        // Se apenas um usuário for selecionado, inicia a conversa 1-para-1
+                        contactsViewModel.onUserClicked(selectedUsers.first())
+                    } else {
+                        // Se mais de um for selecionado, vai para a criação de grupo
+                        val userIdsJson = Gson().toJson(selectedUsers.map { it.uid })
+                        navController.navigate("create_group/$userIdsJson")
+                    }
+                }) {
+                    Icon(Icons.Default.Check, contentDescription = "Confirmar seleção")
+                }
+            }
         }
     ) { paddingValues ->
         Box(
@@ -68,17 +90,29 @@ fun ContactsScreen(
                     CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
                 }
                 is ContactsUiState.Success -> {
-                    if (state.users.isEmpty()) {
-                        Text(
-                            "Nenhum outro usuário encontrado.",
-                            modifier = Modifier.align(Alignment.Center)
-                        )
-                    } else {
-                        LazyColumn(modifier = Modifier.fillMaxSize()) {
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        // O botão de importar contatos foi removido da versão anterior, vamos adicioná-lo de volta
+                        TextButton(
+                            onClick = { navController.navigate("import_contacts") },
+                            modifier = Modifier.fillMaxWidth().padding(8.dp)
+                        ) {
+                            Text("Importar da Agenda do Celular")
+                        }
+                        Divider()
+                        LazyColumn(modifier = Modifier.weight(1f)) {
                             items(state.users) { user ->
-                                UserItem(user = user) {
-                                    contactsViewModel.onUserClicked(user)
-                                }
+                                val isSelected = selectedUsers.any { it.uid == user.uid }
+                                UserItem(
+                                    user = user,
+                                    isSelected = isSelected,
+                                    onClick = {
+                                        if (isSelected) {
+                                            selectedUsers.removeAll { it.uid == user.uid }
+                                        } else {
+                                            selectedUsers.add(user)
+                                        }
+                                    }
+                                )
                             }
                         }
                     }
@@ -95,18 +129,35 @@ fun ContactsScreen(
 }
 
 @Composable
-fun UserItem(user: User, onClick: () -> Unit) {
-    Column(
+fun UserItem(
+    user: User,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
         modifier = Modifier
             .fillMaxWidth()
+            // Ação de clique simplificada, sem toque longo
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .background(if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(user.name, fontWeight = FontWeight.Bold)
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(user.email, style = MaterialTheme.typography.bodySmall)
+        AsyncImage(
+            model = user.profilePictureUrl ?: R.drawable.ic_launcher_foreground,
+            contentDescription = "Foto de Perfil de ${user.name}",
+            modifier = Modifier
+                .size(40.dp)
+                .clip(CircleShape),
+            contentScale = ContentScale.Crop
+        )
+        Spacer(modifier = Modifier.width(16.dp))
+        Column {
+            Text(user.name, fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(user.email, style = MaterialTheme.typography.bodySmall)
+        }
     }
-    Divider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
 }
 
 @Preview(showBackground = true)

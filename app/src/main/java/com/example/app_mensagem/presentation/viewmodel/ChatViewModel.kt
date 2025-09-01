@@ -2,27 +2,37 @@ package com.example.app_mensagem.presentation.viewmodel
 
 import android.app.Application
 import android.net.Uri
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.app_mensagem.MyApplication
 import com.example.app_mensagem.data.ChatRepository
+import com.example.app_mensagem.data.model.Conversation
 import com.example.app_mensagem.data.model.Message
+import com.example.app_mensagem.data.model.User
+import com.example.app_mensagem.presentation.chat.ChatItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Locale
 
 data class ChatUiState(
-    val messages: List<Message> = emptyList(),
-    val filteredMessages: List<Message> = emptyList(),
+    val chatItems: List<ChatItem> = emptyList(), // A lista que a UI vai usar
+    val messages: List<Message> = emptyList(), // Guarda a lista original de mensagens
+    val filteredMessages: List<Message> = emptyList(), // Deprecado, mas mantido por enquanto
     val searchQuery: String = "",
     val conversationTitle: String = "",
+    val conversation: Conversation? = null,
     val pinnedMessage: Message? = null,
     val isLoading: Boolean = true,
     val error: String? = null,
     val mediaToSendUri: Uri? = null,
-    val mediaType: String? = null // "IMAGE" or "VIDEO"
+    val mediaType: String? = null,
+    val groupMembers: Map<String, User> = emptyMap()
 )
 
 class ChatViewModel(application: Application) : AndroidViewModel(application) {
@@ -37,12 +47,44 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         repository = ChatRepository(db.conversationDao(), db.messageDao(), application)
     }
 
+    private fun groupMessagesByDate(messages: List<Message>): List<ChatItem> {
+        val items = mutableListOf<ChatItem>()
+        if (messages.isEmpty()) return items
+
+        var lastHeaderDate = ""
+        messages.forEach { message ->
+            val messageDateString = formatDateHeader(message.timestamp)
+            if (messageDateString != lastHeaderDate) {
+                items.add(ChatItem.DateHeader(messageDateString))
+                lastHeaderDate = messageDateString
+            }
+            items.add(ChatItem.MessageItem(message))
+        }
+        return items
+    }
+
+    private fun formatDateHeader(timestamp: Long): String {
+        val messageCalendar = Calendar.getInstance().apply { timeInMillis = timestamp }
+        val todayCalendar = Calendar.getInstance()
+        val yesterdayCalendar = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -1) }
+
+        return when {
+            isSameDay(messageCalendar, todayCalendar) -> "Hoje"
+            isSameDay(messageCalendar, yesterdayCalendar) -> "Ontem"
+            else -> SimpleDateFormat("dd MMMM yyyy", Locale.getDefault()).format(messageCalendar.time)
+        }
+    }
+
+    private fun isSameDay(cal1: Calendar, cal2: Calendar): Boolean {
+        return cal1.get(Calendar.YEAR) == cal2.get(Calendar.YEAR) &&
+                cal1.get(Calendar.DAY_OF_YEAR) == cal2.get(Calendar.DAY_OF_YEAR)
+    }
+
     fun onMediaSelected(uri: Uri?, type: String) {
         _uiState.value = _uiState.value.copy(mediaToSendUri = uri, mediaType = type)
     }
 
     fun onSearchQueryChanged(query: String) {
-        _uiState.value = _uiState.value.copy(searchQuery = query)
         val filteredList = if (query.isBlank()) {
             _uiState.value.messages
         } else {
@@ -50,22 +92,44 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 it.content.contains(query, ignoreCase = true) && it.type == "TEXT"
             }
         }
-        _uiState.value = _uiState.value.copy(filteredMessages = filteredList)
+        _uiState.value = _uiState.value.copy(
+            searchQuery = query,
+            // ATUALIZA AS DUAS LISTAS PARA CONSISTÊNCIA
+            filteredMessages = filteredList,
+            chatItems = groupMessagesByDate(filteredList)
+        )
     }
 
     fun loadMessages(conversationId: String) {
         viewModelScope.launch {
-            repository.getConversationDetails(conversationId)?.let { conversation ->
-                _uiState.value = _uiState.value.copy(conversationTitle = conversation.name)
-                if (conversation.pinnedMessageId != null) {
-                    val pinnedMessage = repository.getMessageById(conversationId, conversation.pinnedMessageId)
-                    _uiState.value = _uiState.value.copy(pinnedMessage = pinnedMessage)
-                } else {
-                    _uiState.value = _uiState.value.copy(pinnedMessage = null)
-                }
+            _uiState.value = _uiState.value.copy(isLoading = true)
+
+            val conversation = repository.getConversationDetails(conversationId)
+            if (conversation == null) {
+                _uiState.value = _uiState.value.copy(error = "Conversa não encontrada.", isLoading = false)
+                return@launch
             }
 
-            repository.getMessagesForConversation(conversationId)
+            var membersMap = emptyMap<String, User>()
+            if (conversation.isGroup) {
+                val members = repository.getGroupMembers(conversationId)
+                membersMap = members.associateBy { it.uid }
+            }
+
+            val pinnedMessage = if (conversation.pinnedMessageId != null) {
+                repository.getMessageById(conversationId, conversation.pinnedMessageId, conversation.isGroup)
+            } else {
+                null
+            }
+
+            _uiState.value = _uiState.value.copy(
+                conversationTitle = conversation.name,
+                conversation = conversation,
+                groupMembers = membersMap,
+                pinnedMessage = pinnedMessage
+            )
+
+            repository.getMessagesForConversation(conversationId, conversation.isGroup)
                 .catch { exception ->
                     _uiState.value = _uiState.value.copy(
                         error = exception.message ?: "Erro ao carregar mensagens",
@@ -73,30 +137,39 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
                 .collect { messages ->
+                    val filteredList = if (_uiState.value.searchQuery.isBlank()) {
+                        messages
+                    } else {
+                        messages.filter {
+                            it.content.contains(_uiState.value.searchQuery, ignoreCase = true) && it.type == "TEXT"
+                        }
+                    }
                     _uiState.value = _uiState.value.copy(
                         messages = messages,
-                        filteredMessages = if (_uiState.value.searchQuery.isBlank()) messages else _uiState.value.filteredMessages,
+                        filteredMessages = filteredList,
+                        chatItems = groupMessagesByDate(filteredList), // GERA A LISTA PARA A UI
                         isLoading = false
                     )
-                    repository.markMessagesAsRead(conversationId, messages)
+
+                    if (!conversation.isGroup) {
+                        repository.markMessagesAsRead(conversationId, messages, conversation.isGroup)
+                    }
                 }
         }
     }
 
     fun sendMessage(conversationId: String, text: String) {
         viewModelScope.launch {
-            try {
-                val mediaUri = _uiState.value.mediaToSendUri
-                val mediaType = _uiState.value.mediaType
+            val isGroup = _uiState.value.conversation?.isGroup ?: false
+            val mediaUri = _uiState.value.mediaToSendUri
 
+            try {
                 if (mediaUri != null) {
-                    when (mediaType) {
-                        "IMAGE" -> repository.sendImageMessage(conversationId, mediaUri)
-                        "VIDEO" -> repository.sendVideoMessage(conversationId, mediaUri)
-                    }
+                    val mediaType = _uiState.value.mediaType ?: "IMAGE"
+                    repository.sendMediaMessage(conversationId, mediaUri, mediaType, isGroup)
                     _uiState.value = _uiState.value.copy(mediaToSendUri = null, mediaType = null)
                 } else if (text.isNotBlank()) {
-                    repository.sendMessage(conversationId, text)
+                    repository.sendMessage(conversationId, text, isGroup)
                 }
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
@@ -108,15 +181,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun onReactionClick(conversationId: String, messageId: String, emoji: String) {
         viewModelScope.launch(Dispatchers.IO) {
-            repository.toggleReaction(conversationId, messageId, emoji)
+            val isGroup = _uiState.value.conversation?.isGroup ?: false
+            repository.toggleReaction(conversationId, messageId, emoji, isGroup)
         }
     }
 
     fun onPinMessageClick(conversationId: String, message: Message) {
         viewModelScope.launch {
             try {
-                repository.togglePinMessage(conversationId, message)
-                loadMessages(conversationId)
+                val isGroup = _uiState.value.conversation?.isGroup ?: false
+                repository.togglePinMessage(conversationId, message, isGroup)
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(error = e.message ?: "Falha ao fixar mensagem")
             }

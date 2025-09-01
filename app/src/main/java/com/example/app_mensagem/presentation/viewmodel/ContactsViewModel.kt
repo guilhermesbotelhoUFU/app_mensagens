@@ -8,7 +8,6 @@ import com.example.app_mensagem.data.ChatRepository
 import com.example.app_mensagem.data.model.User
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.launch
 
 sealed class ContactsUiState {
@@ -34,20 +33,19 @@ class ContactsViewModel(application: Application) : AndroidViewModel(application
 
     init {
         val db = (application as MyApplication).database
-        // Correção: Passando "application" como o terceiro parâmetro para o context
         repository = ChatRepository(db.conversationDao(), db.messageDao(), application)
         loadUsers()
     }
 
     fun loadUsers() {
         viewModelScope.launch {
-            repository.getUsers()
-                .catch { exception ->
-                    _uiState.value = ContactsUiState.Error(exception.message ?: "Erro desconhecido")
-                }
-                .collect { users ->
-                    _uiState.value = ContactsUiState.Success(users)
-                }
+            _uiState.value = ContactsUiState.Loading
+            try {
+                val users = repository.getUsers()
+                _uiState.value = ContactsUiState.Success(users)
+            } catch (e: Exception) {
+                _uiState.value = ContactsUiState.Error(e.message ?: "Falha ao carregar usuários.")
+            }
         }
     }
 
@@ -58,6 +56,17 @@ class ContactsViewModel(application: Application) : AndroidViewModel(application
                 _navigationState.value = ContactNavigationState.NavigateToChat(conversationId)
             } catch (e: Exception) {
                 _uiState.value = ContactsUiState.Error(e.message ?: "Falha ao criar conversa")
+            }
+        }
+    }
+
+    // **** FUNÇÃO FALTANTE ADICIONADA AQUI ****
+    fun createGroup(name: String, memberIds: List<String>) {
+        viewModelScope.launch {
+            try {
+                repository.createGroup(name, memberIds)
+            } catch (e: Exception) {
+                _uiState.value = ContactsUiState.Error(e.message ?: "Falha ao criar grupo")
             }
         }
     }
