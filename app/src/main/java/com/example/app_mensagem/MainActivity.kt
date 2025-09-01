@@ -100,7 +100,16 @@ class MainActivity : ComponentActivity() {
                         composable("signup") { SignUpScreen(navController, authViewModel) }
                         composable("home") { HomeScreen(navController, authViewModel, conversationsViewModel) }
                         composable("forgot_password") { ForgotPasswordScreen(navController, authViewModel) }
-                        composable("contacts") { ContactsScreen(navController, contactsViewModel) }
+                        composable(
+                            route = "contacts?selectionMode={selectionMode}",
+                            arguments = listOf(navArgument("selectionMode") {
+                                type = NavType.BoolType
+                                defaultValue = false
+                            })
+                        ) { backStackEntry ->
+                            val selectionMode = backStackEntry.arguments?.getBoolean("selectionMode") ?: false
+                            ContactsScreen(navController, contactsViewModel, selectionMode)
+                        }
                         composable("profile") { ProfileScreen(navController, profileViewModel) }
                         composable(
                             route = "create_group/{memberIdsJson}",

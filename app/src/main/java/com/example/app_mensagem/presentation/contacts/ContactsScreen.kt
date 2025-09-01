@@ -35,7 +35,8 @@ import com.google.gson.Gson
 @Composable
 fun ContactsScreen(
     navController: NavController,
-    contactsViewModel: ContactsViewModel = viewModel()
+    contactsViewModel: ContactsViewModel = viewModel(),
+    selectionMode: Boolean = false
 ) {
     val contactsState by contactsViewModel.uiState.collectAsState()
     val navigationState by contactsViewModel.navigationState.collectAsState()
@@ -54,7 +55,7 @@ fun ContactsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(if (selectedUsers.isEmpty()) "Contatos" else "${selectedUsers.size} selecionados") },
+                title = { Text(if (selectionMode) "Adicionar Membro" else if (selectedUsers.isEmpty()) "Contatos" else "${selectedUsers.size} selecionados") },
                 navigationIcon = {
                     IconButton(onClick = { navController.popBackStack() }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Voltar")
@@ -63,14 +64,11 @@ fun ContactsScreen(
             )
         },
         floatingActionButton = {
-            if (selectedUsers.isNotEmpty()) {
+            if (selectedUsers.isNotEmpty() && !selectionMode) {
                 FloatingActionButton(onClick = {
-                    // **** LÓGICA INTELIGENTE ADICIONADA AQUI ****
                     if (selectedUsers.size == 1) {
-                        // Se apenas um usuário for selecionado, inicia a conversa 1-para-1
                         contactsViewModel.onUserClicked(selectedUsers.first())
                     } else {
-                        // Se mais de um for selecionado, vai para a criação de grupo
                         val userIdsJson = Gson().toJson(selectedUsers.map { it.uid })
                         navController.navigate("create_group/$userIdsJson")
                     }
@@ -91,9 +89,8 @@ fun ContactsScreen(
                 }
                 is ContactsUiState.Success -> {
                     Column(modifier = Modifier.fillMaxSize()) {
-                        // O botão de importar contatos foi removido da versão anterior, vamos adicioná-lo de volta
                         TextButton(
-                            onClick = { navController.navigate("import_contacts") },
+                            onClick = { /* Lógica de importar contatos virá aqui */ },
                             modifier = Modifier.fillMaxWidth().padding(8.dp)
                         ) {
                             Text("Importar da Agenda do Celular")
@@ -106,10 +103,17 @@ fun ContactsScreen(
                                     user = user,
                                     isSelected = isSelected,
                                     onClick = {
-                                        if (isSelected) {
-                                            selectedUsers.removeAll { it.uid == user.uid }
+                                        if (selectionMode) {
+                                            navController.previousBackStackEntry
+                                                ?.savedStateHandle
+                                                ?.set("selectedUserId", user.uid)
+                                            navController.popBackStack()
                                         } else {
-                                            selectedUsers.add(user)
+                                            if (isSelected) {
+                                                selectedUsers.removeAll { it.uid == user.uid }
+                                            } else {
+                                                selectedUsers.add(user)
+                                            }
                                         }
                                     }
                                 )
@@ -137,7 +141,6 @@ fun UserItem(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            // Ação de clique simplificada, sem toque longo
             .clickable(onClick = onClick)
             .background(if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
             .padding(horizontal = 16.dp, vertical = 12.dp),

@@ -9,5 +9,6 @@ data class User(
     val name: String = "",
     val email: String = "",
     val fcmToken: String = "",
-    val profilePictureUrl: String? = null
+    val profilePictureUrl: String? = null,
+    val status: String = ""
 )

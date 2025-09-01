@@ -33,7 +33,7 @@ class ProfileViewModel : ViewModel() {
                 if (user != null) {
                     _uiState.value = ProfileUiState.Success(user)
                 } else {
-                    _uiState.value = ProfileUiState.Error("Usuário não encontrado.")
+                    _uiState.value = ProfileUiState.Error("Utilizador não encontrado.")
                 }
             } catch (e: Exception) {
                 _uiState.value = ProfileUiState.Error(e.message ?: "Erro ao carregar perfil.")
@@ -41,10 +41,10 @@ class ProfileViewModel : ViewModel() {
         }
     }
 
-    fun updateProfile(name: String, imageUri: Uri?) {
+    fun updateProfile(name: String, status: String, imageUri: Uri?) {
         viewModelScope.launch {
             try {
-                repository.updateProfile(name, imageUri)
+                repository.updateProfile(name, status, imageUri)
                 loadUserProfile() // Recarrega para mostrar os dados atualizados
             } catch (e: Exception) {
                 _uiState.value = ProfileUiState.Error(e.message ?: "Erro ao atualizar perfil.")

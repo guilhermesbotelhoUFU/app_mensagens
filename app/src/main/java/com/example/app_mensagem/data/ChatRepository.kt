@@ -245,6 +245,27 @@ class ChatRepository(
         }
     }
 
+    suspend fun sendStickerMessage(conversationId: String, stickerId: String, isGroup: Boolean) {
+        val currentUserId = auth.currentUser?.uid ?: return
+        val path = if (isGroup) "group-messages" else "messages"
+        val messagesRef = database.getReference(path).child(conversationId)
+        val messageId = messagesRef.push().key ?: return
+
+        val message = Message(
+            id = messageId,
+            conversationId = conversationId,
+            senderId = currentUserId,
+            content = stickerId,
+            type = "STICKER",
+            timestamp = System.currentTimeMillis(),
+            status = "SENT"
+        )
+
+        messagesRef.child(messageId).setValue(message).await()
+        messageDao.insertOrUpdate(message)
+        updateLastMessageForConversation(conversationId, "Figurinha", message.timestamp, isGroup)
+    }
+
     suspend fun sendMediaMessage(conversationId: String, uri: Uri, type: String, isGroup: Boolean) {
         val currentUserId = auth.currentUser?.uid ?: return
         val path = if (isGroup) "group-messages" else "messages"
@@ -396,8 +417,52 @@ class ChatRepository(
 
         messageRef.child("reactions").setValue(reactions).await()
     }
+
     suspend fun getGroupDetails(groupId: String): Group? {
         val snapshot = database.getReference("groups").child(groupId).get().await()
         return snapshot.getValue(Group::class.java)
+    }
+
+    suspend fun updateGroupName(groupId: String, newName: String) {
+        database.getReference("groups").child(groupId).child("name").setValue(newName).await()
+
+        val groupSnapshot = database.getReference("groups").child(groupId).child("members").get().await()
+        val memberIds = groupSnapshot.children.mapNotNull { it.key }
+        memberIds.forEach { memberId ->
+            database.getReference("user-conversations/$memberId/$groupId").child("name").setValue(newName)
+        }
+    }
+
+    suspend fun addMemberToGroup(groupId: String, userId: String) {
+        database.getReference("groups/$groupId/members").child(userId).setValue(true).await()
+
+        val conversationSnapshot = database.getReference("user-conversations")
+            .child(auth.currentUser?.uid ?: "")
+            .child(groupId).get().await()
+        val groupConversation = conversationSnapshot.getValue(Conversation::class.java)
+
+        if (groupConversation != null) {
+            database.getReference("user-conversations/$userId/$groupId").setValue(groupConversation).await()
+        }
+    }
+
+    suspend fun removeMemberFromGroup(groupId: String, userId: String) {
+        database.getReference("groups/$groupId/members").child(userId).removeValue().await()
+        database.getReference("user-conversations/$userId/$groupId").removeValue().await()
+    }
+
+    suspend fun uploadGroupProfilePicture(groupId: String, imageUri: Uri): String {
+        val storageRef = storage.getReference("group_profile_pictures/$groupId/${UUID.randomUUID()}.jpg")
+        storageRef.putFile(imageUri).await()
+        val downloadUrl = storageRef.downloadUrl.await().toString()
+
+        database.getReference("groups/$groupId").child("profilePictureUrl").setValue(downloadUrl).await()
+
+        val groupSnapshot = database.getReference("groups").child(groupId).child("members").get().await()
+        val memberIds = groupSnapshot.children.mapNotNull { it.key }
+        memberIds.forEach { memberId ->
+            database.getReference("user-conversations/$memberId/$groupId").child("profilePictureUrl").setValue(downloadUrl)
+        }
+        return downloadUrl
     }
 }

@@ -53,13 +53,12 @@ import com.example.app_mensagem.data.model.User
 import com.example.app_mensagem.presentation.viewmodel.ChatViewModel
 import com.example.app_mensagem.ui.theme.App_mensagemTheme
 import com.google.firebase.auth.FirebaseAuth
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.regex.Pattern
 import android.util.Log
-
-// A lista de stickers foi removida pois a funcionalidade foi substituída pelo envio de mídia.
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -70,6 +69,9 @@ fun ChatScreen(navController: NavController, conversationId: String?) {
     val listState = rememberLazyListState()
     var selectedMessageId by remember { mutableStateOf<String?>(null) }
     var isSearchActive by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val sheetState = rememberModalBottomSheetState()
+    var showStickerSheet by remember { mutableStateOf(false) }
 
     val imagePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent(),
@@ -206,6 +208,9 @@ fun ChatScreen(navController: NavController, conversationId: String?) {
                     IconButton(onClick = { videoPickerLauncher.launch("video/*") }) {
                         Icon(Icons.Default.Videocam, contentDescription = "Anexar Vídeo")
                     }
+                    IconButton(onClick = { showStickerSheet = true }) {
+                        Icon(Icons.Default.Mood, contentDescription = "Enviar Sticker")
+                    }
                     OutlinedTextField(
                         value = text,
                         onValueChange = { text = it },
@@ -287,6 +292,26 @@ fun ChatScreen(navController: NavController, conversationId: String?) {
             }
         }
     }
+
+    if (showStickerSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showStickerSheet = false },
+            sheetState = sheetState
+        ) {
+            StickerPicker(
+                onStickerSelected = { stickerId ->
+                    if (conversationId != null) {
+                        chatViewModel.sendSticker(conversationId, stickerId)
+                    }
+                    scope.launch { sheetState.hide() }.invokeOnCompletion {
+                        if (!sheetState.isVisible) {
+                            showStickerSheet = false
+                        }
+                    }
+                }
+            )
+        }
+    }
 }
 
 @Composable
@@ -311,12 +336,41 @@ fun PinnedMessageView(message: Message) {
                 text = when (message.type) {
                     "IMAGE" -> "📷 Imagem"
                     "VIDEO" -> "🎥 Vídeo"
+                    "STICKER" -> "Figurinha"
                     else -> message.content
                 },
                 style = MaterialTheme.typography.bodyMedium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+fun StickerPicker(
+    onStickerSelected: (String) -> Unit
+) {
+    val stickers = listOf(
+        "sticker_01" to R.drawable.sticker_01,
+        "sticker_02" to R.drawable.sticker_02,
+        "sticker_03" to R.drawable.sticker_03,
+        "sticker_04" to R.drawable.sticker_04
+    )
+
+    LazyVerticalGrid(
+        columns = GridCells.Adaptive(minSize = 100.dp),
+        modifier = Modifier.padding(16.dp)
+    ) {
+        items(stickers) { (id, drawable) ->
+            Image(
+                painter = painterResource(id = drawable),
+                contentDescription = "Sticker $id",
+                modifier = Modifier
+                    .size(100.dp)
+                    .padding(8.dp)
+                    .clickable { onStickerSelected(id) }
             )
         }
     }
@@ -407,6 +461,17 @@ fun MessageBubble(
     }
 }
 
+@Composable
+private fun getStickerResource(stickerId: String?): Int {
+    return when (stickerId) {
+        "sticker_01" -> R.drawable.sticker_01
+        "sticker_02" -> R.drawable.sticker_02
+        "sticker_03" -> R.drawable.sticker_03
+        "sticker_04" -> R.drawable.sticker_04
+        else -> R.drawable.ic_launcher_foreground
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun BubbleContent(
@@ -417,6 +482,7 @@ private fun BubbleContent(
     val isSentByCurrentUser = message.senderId == FirebaseAuth.getInstance().currentUser?.uid
     val bubbleColor = if (isSentByCurrentUser) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer
     val context = LocalContext.current
+    val hasPadding = message.type == "TEXT" || message.type == "IMAGE" || message.type == "VIDEO"
 
     Box(
         modifier = Modifier
@@ -437,12 +503,14 @@ private fun BubbleContent(
         Column(
             modifier = Modifier
                 .clip(RoundedCornerShape(16.dp))
-                .background(bubbleColor)
-                .padding(if (message.type == "IMAGE" || message.type == "VIDEO") 4.dp else 12.dp, 8.dp),
+                .background(if (message.type == "STICKER") Color.Transparent else bubbleColor)
+                .padding(if (hasPadding) 1.dp else 0.dp),
             horizontalAlignment = if (isSentByCurrentUser) Alignment.End else Alignment.Start
         ) {
             when (message.type) {
-                "TEXT" -> HighlightingText(text = message.content, query = searchQuery)
+                "TEXT" -> Box(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                    HighlightingText(text = message.content, query = searchQuery)
+                }
                 "IMAGE" -> {
                     Image(
                         painter = rememberAsyncImagePainter(model = message.content),
@@ -471,18 +539,32 @@ private fun BubbleContent(
                         )
                     }
                 }
+                "STICKER" -> {
+                    Image(
+                        painter = painterResource(id = getStickerResource(message.content)),
+                        contentDescription = "Sticker",
+                        modifier = Modifier
+                            .size(120.dp),
+                        contentScale = ContentScale.Fit
+                    )
+                }
             }
-            Spacer(modifier = Modifier.height(4.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = formatTimestamp(message.timestamp),
-                    style = MaterialTheme.typography.bodySmall,
-                    fontSize = 10.sp,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                )
-                if (isSentByCurrentUser) {
-                    Spacer(modifier = Modifier.width(4.dp))
-                    MessageStatusIcon(message = message)
+
+            if (hasPadding) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp, top = 4.dp).align(Alignment.End)
+                ) {
+                    Text(
+                        text = formatTimestamp(message.timestamp),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                    if (isSentByCurrentUser) {
+                        Spacer(modifier = Modifier.width(4.dp))
+                        MessageStatusIcon(message = message)
+                    }
                 }
             }
         }

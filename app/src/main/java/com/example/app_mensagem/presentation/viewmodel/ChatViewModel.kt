@@ -21,9 +21,9 @@ import java.util.Calendar
 import java.util.Locale
 
 data class ChatUiState(
-    val chatItems: List<ChatItem> = emptyList(), // A lista que a UI vai usar
-    val messages: List<Message> = emptyList(), // Guarda a lista original de mensagens
-    val filteredMessages: List<Message> = emptyList(), // Deprecado, mas mantido por enquanto
+    val chatItems: List<ChatItem> = emptyList(),
+    val messages: List<Message> = emptyList(),
+    val filteredMessages: List<Message> = emptyList(),
     val searchQuery: String = "",
     val conversationTitle: String = "",
     val conversation: Conversation? = null,
@@ -94,7 +94,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
         _uiState.value = _uiState.value.copy(
             searchQuery = query,
-            // ATUALIZA AS DUAS LISTAS PARA CONSISTÊNCIA
             filteredMessages = filteredList,
             chatItems = groupMessagesByDate(filteredList)
         )
@@ -147,7 +146,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     _uiState.value = _uiState.value.copy(
                         messages = messages,
                         filteredMessages = filteredList,
-                        chatItems = groupMessagesByDate(filteredList), // GERA A LISTA PARA A UI
+                        chatItems = groupMessagesByDate(filteredList),
                         isLoading = false
                     )
 
@@ -174,6 +173,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     error = e.message ?: "Erro ao enviar mensagem"
+                )
+            }
+        }
+    }
+
+    fun sendSticker(conversationId: String, stickerId: String) {
+        viewModelScope.launch {
+            val isGroup = _uiState.value.conversation?.isGroup ?: false
+            try {
+                repository.sendStickerMessage(conversationId, stickerId, isGroup)
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    error = e.message ?: "Erro ao enviar sticker"
                 )
             }
         }

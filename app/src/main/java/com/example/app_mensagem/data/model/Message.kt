@@ -12,7 +12,7 @@ data class Message(
     val conversationId: String = "",
     val senderId: String = "",
     val content: String = "",
-    val type: String = "TEXT", // "TEXT", "IMAGE", "VIDEO"
+    val type: String = "TEXT", // "TEXT", "IMAGE", "VIDEO", "STICKER"
     val thumbnailUrl: String? = null,
     val timestamp: Long = 0L,
     var status: String = "SENT",

@@ -49,10 +49,8 @@ fun HomeScreen(
     var isSearchActive by remember { mutableStateOf(false) }
     val conversationState by conversationsViewModel.uiState.collectAsState()
 
-    // **** LÓGICA DE CICLO DE VIDA ADICIONADA ****
     LifecycleObserver { event ->
         if (event == Lifecycle.Event.ON_RESUME) {
-            // Toda vez que a tela se torna ativa, força uma sincronização
             conversationsViewModel.resyncConversations()
         }
     }
